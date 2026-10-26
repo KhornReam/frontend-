@@ -7,7 +7,7 @@ import App from './App.vue'
 import DashboardView from './views/DashboardView.vue'
 import ProductsView from './views/ProductsView.vue'
 import UserView from './views/UserView.vue'
-import './assets/style.css'
+import './assets/main.css'
 
 
 
