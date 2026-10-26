@@ -8,53 +8,6 @@ Built with **Vue 3, Laravel, and MySQL**, this project demonstrates practical fu
 
 StudentHub provides a centralized platform for managing academic information through a clean, responsive, and user-friendly interface.
 
-### 🎯 Objectives
-
-- Simplify student information management.
-- Manage classes, subjects, and teacher assignments.
-- Track student attendance and academic performance.
-- Provide dashboards and academic reports.
-- Implement secure authentication and role-based access control.
-- Apply clean architecture and maintainable coding practices.
-
-## ✨ Features
-
-### 📊 Dashboard
-- Total student statistics
-- Class and subject summaries
-- Attendance overview
-- Academic performance charts
-- Recent activity
-
-### 👨‍🎓 Student Management
-- Create, view, update, and delete student records
-- Generate unique student IDs
-- Search, filter, sort, and paginate students
-- Manage student profiles and enrollment information
-
-### 🏫 Academic Management
-- Class management
-- Subject management
-- Teacher assignments
-- Student enrollment
-
-### 📅 Attendance Management
-- Record daily attendance
-- Track Present, Absent, Late, and Excused statuses
-- Calculate attendance percentages
-- Filter attendance by student, class, and date
-
-### 📝 Grade Management
-- Manage assessments and scores
-- Calculate weighted averages
-- Track student performance
-- Generate academic reports
-
-### 🔐 Authentication and Authorization
-- Secure login and logout
-- Role-based access control
-- Admin, Teacher, and Student roles
-- Protected routes and API endpoints
 
 > **Note:** Features are planned for implementation in phases. Update this section as each feature is completed and tested.
 
@@ -76,91 +29,7 @@ StudentHub provides a centralized platform for managing academic information thr
 | Chart.js | Dashboard charts |
 | Git & GitHub | Version control |
 
-## 🏗️ System Architecture
 
-```text
-┌──────────────────────────────────┐
-│         Vue 3 Frontend           │
-│                                  │
-│ Pages · Components · Router      │
-│ Pinia · Axios · UI               │
-└────────────────┬─────────────────┘
-                 │
-          HTTP / JSON API
-                 │
-┌────────────────▼─────────────────┐
-│        Laravel Backend           │
-│                                  │
-│ Routes · Controllers             │
-│ Validation · Services · Models   │
-│ Authentication · Authorization   │
-└────────────────┬─────────────────┘
-                 │
-             Eloquent ORM
-                 │
-┌────────────────▼─────────────────┐
-│           MySQL                  │
-│                                  │
-│ Users · Students · Classes       │
-│ Subjects · Attendance · Grades   │
-└──────────────────────────────────┘
-```
-
-## 📁 Project Structure
-
-```text
-studenthub/
-├── frontend/
-│   └── src/
-│       ├── assets/
-│       ├── components/
-│       ├── composables/
-│       ├── layouts/
-│       ├── pages/
-│       ├── router/
-│       ├── services/
-│       ├── stores/
-│       ├── utils/
-│       ├── App.vue
-│       └── main.js
-│
-├── backend/
-│   ├── app/
-│   │   ├── Http/
-│   │   │   ├── Controllers/
-│   │   │   ├── Requests/
-│   │   │   └── Resources/
-│   │   ├── Models/
-│   │   ├── Policies/
-│   │   └── Services/
-│   ├── database/
-│   │   ├── migrations/
-│   │   ├── factories/
-│   │   └── seeders/
-│   ├── routes/
-│   ├── tests/
-│   └── composer.json
-│
-├── docs/
-│   ├── architecture.md
-│   └── api-documentation.md
-│
-├── .gitignore
-└── README.md
-```
-
-## ⚙️ Installation and Setup
-
-### Prerequisites
-
-Install the following tools before starting:
-
-- [Node.js](https://nodejs.org/)
-- [PHP](https://www.php.net/)
-- [Composer](https://getcomposer.org/)
-- [MySQL](https://dev.mysql.com/downloads/)
-- [Git](https://git-scm.com/)
-- [Postman](https://www.postman.com/) for API testing
 
 ### 1. Clone the Repository
 
@@ -202,7 +71,7 @@ APP_URL=http://127.0.0.1:8000
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
-DB_DATABASE=studenthub
+DB_DATABASE=test
 DB_USERNAME=root
 DB_PASSWORD=
 ```
@@ -235,64 +104,9 @@ npm run dev
 
 Configure the frontend API base URL in your Axios configuration, for example:
 
-```javascript
-// frontend/src/services/api.js
 
-import axios from 'axios';
 
-const api = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api/v1',
-  headers: {
-    Accept: 'application/json',
-    'Content-Type': 'application/json',
-  },
-});
 
-export default api;
-```
-
-Adjust the base URL to match the API routes and authentication setup you implement.
-
-The frontend development server will display its local URL in the terminal, usually:
-
-`http://localhost:5173`
-
-## 🔌 API Endpoints
-
-The following endpoints are planned examples for the versioned REST API.
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/v1/students` | Retrieve students |
-| POST | `/api/v1/students` | Create a student |
-| GET | `/api/v1/students/{id}` | Retrieve a student |
-| PUT | `/api/v1/students/{id}` | Update a student |
-| DELETE | `/api/v1/students/{id}` | Delete a student |
-| GET | `/api/v1/classes` | Retrieve classes |
-| GET | `/api/v1/subjects` | Retrieve subjects |
-| GET | `/api/v1/attendance` | Retrieve attendance records |
-| GET | `/api/v1/grades` | Retrieve grade records |
-
-These endpoints must be implemented in Laravel before they can be used.
-
-## 🗄️ Database Design
-
-The planned database includes the following entities:
-
-- `users` — authentication and user roles
-- `students` — student profile information
-- `teachers` — teacher profiles
-- `classes` — class information
-- `subjects` — subject information
-- `enrollments` — student enrollment records
-- `class_subjects` — class, subject, and teacher assignments
-- `attendance_sessions` — attendance sessions
-- `attendances` — individual attendance records
-- `assessments` — assessment definitions
-- `grades` — student assessment scores
-- `activity_logs` — important system activities
-
-Use foreign keys, unique constraints, indexes, and appropriate relationships to maintain data integrity.
 
 ## 🧪 Testing
 
@@ -321,12 +135,4 @@ Test API requests using Postman and verify that validation, authentication, perm
 - Validate uploaded files and limit their allowed types and sizes.
 - Never expose production credentials or sensitive student data in source control.
 
-## 🚀 Development Roadmap
 
-- [ ] Phase 1 — Requirements and system architecture
-- [ ] Phase 2 — Database schema and migrations
-- [ ] Phase 3 — Authentication and authorization
-- [ ] Phase 4 — Student CRUD and API integration
-- [ ] Phase 5 — Classes, subjects, and enrollments
-- [ ] Phase 6 — Attendance management
-- [ ] Phase

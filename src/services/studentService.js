@@ -8,11 +8,18 @@ const api = axios.create({
 })
 
 export function getStudents() {
-  return api.get('/students')
+  return api.get('/students').then((response) => ({
+    ...response,
+    data: response.data.data ?? response.data,
+  }))
 }
 
 export function createStudent(student) {
   return api.post('/students', student)
+}
+
+export function updateStudent(id, student) {
+  return api.put(`/students/${id}`, student)
 }
 
 export function deleteStudent(id) {
