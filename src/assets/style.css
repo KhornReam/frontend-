@@ -1,0 +1,94 @@
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f4f6f9;
+  color: #263238;
+}
+
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 220px;
+  background: #17243a;
+  color: white;
+  padding: 24px;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 30px;
+}
+
+.sidebar a {
+  color: white;
+  text-decoration: none;
+  padding: 10px;
+  border-radius: 6px;
+}
+
+.sidebar a.router-link-active {
+  background: #42b883;
+}
+
+.content {
+  flex: 1;
+  padding: 30px;
+}
+
+.cards {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.card {
+  background: white;
+  padding: 24px;
+  border-radius: 10px;
+  min-width: 170px;
+  box-shadow: 0 2px 8px #0000000d;
+}
+
+.card p {
+  font-size: 28px;
+  font-weight: bold;
+  color: #42b883;
+}
+
+input,
+button {
+  padding: 10px;
+  margin: 5px;
+}
+
+button {
+  background: #42b883;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+table {
+  background: white;
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 20px;
+}
+
+th,
+td {
+  padding: 12px;
+  border-bottom: 1px solid #ddd;
+  text-align: left;
+}
