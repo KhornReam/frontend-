@@ -5,6 +5,7 @@ import AdminLayout from '../layouts/AdminLayout.vue'
 import LoginPage from '../pages/admin/Login.vue'
 import AssessmentsPage from '../pages/admin/Assessments.vue'
 import AttendancePage from '../pages/admin/Attendance.vue'
+import AutomationsPage from '../pages/admin/Automations.vue'
 import ClassesPage from '../pages/admin/Classes.vue'
 import ReportsPage from '../pages/admin/Reports.vue'
 import SettingsPage from '../pages/admin/Settings.vue'
@@ -30,6 +31,7 @@ const router = createRouter({
         { path: 'attendance', component: AttendancePage, meta: { title: 'Attendance' } },
         { path: 'exams-scores', component: AssessmentsPage, meta: { title: 'Exams & Scores' } },
         { path: 'users-roles', component: UsersPage, meta: { title: 'Users & Roles' } },
+        { path: 'automations', component: AutomationsPage, meta: { title: 'Automations' } },
         { path: 'reports', component: ReportsPage, meta: { title: 'Reports' } },
         { path: 'settings', component: SettingsPage, meta: { title: 'Settings' } },
       ],

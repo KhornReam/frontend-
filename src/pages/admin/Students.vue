@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { getClasses } from '../../services/classService.js'
 import { createStudent, deleteStudent, getStudents, updateStudent } from '../../services/studentService.js'
 
 const students = ref([])
@@ -10,21 +11,22 @@ const pageError = ref('')
 const formError = ref('')
 const modalOpen = ref(false)
 const editingId = ref(null)
-const form = reactive({ name: '', email: '', course: '' })
+const classOptions = ref([])
+const form = reactive({ name: '', email: '', course: '', school_class_id: '' })
 
 const filteredStudents = computed(() => {
   const query = search.value.trim().toLowerCase()
   if (!query) return students.value
 
   return students.value.filter((student) =>
-    [student.name, student.email, student.course].some((value) => value?.toLowerCase().includes(query)),
+    [student.name, student.email, student.course, student.school_class?.name].some((value) => value?.toLowerCase().includes(query)),
   )
 })
 
 function messageFor(error) {
   const validationErrors = error.response?.data?.errors
   if (validationErrors) return Object.values(validationErrors).flat().join(' ')
-  if (!error.response) return 'Could not connect to Laravel. Check that the backend is running.'
+  if (!error.response) return 'Could not connect to Laravel backend. Check that the server is running.'
   return error.response.data?.message || 'The request could not be completed.'
 }
 
@@ -41,16 +43,30 @@ async function loadStudents() {
   }
 }
 
+async function loadClasses() {
+  try {
+    const response = await getClasses()
+    classOptions.value = response.data
+  } catch (error) {
+    pageError.value = messageFor(error)
+  }
+}
+
 function openCreateForm() {
   editingId.value = null
-  Object.assign(form, { name: '', email: '', course: '' })
+  Object.assign(form, { name: '', email: '', course: '', school_class_id: '' })
   formError.value = ''
   modalOpen.value = true
 }
 
 function openEditForm(student) {
   editingId.value = student.id
-  Object.assign(form, { name: student.name, email: student.email, course: student.course || '' })
+  Object.assign(form, {
+    name: student.name,
+    email: student.email,
+    course: student.course || '',
+    school_class_id: student.school_class_id || '',
+  })
   formError.value = ''
   modalOpen.value = true
 }
@@ -58,7 +74,13 @@ function openEditForm(student) {
 async function saveStudent() {
   saving.value = true
   formError.value = ''
-  const payload = { ...form, course: form.course || null }
+
+  const payload = {
+    name: form.name.trim(),
+    email: form.email.trim(),
+    course: form.course.trim() || null,
+    school_class_id: form.school_class_id || null,
+  }
 
   try {
     if (editingId.value) await updateStudent(editingId.value, payload)
@@ -83,66 +105,213 @@ async function removeStudent(student) {
   }
 }
 
-onMounted(loadStudents)
+onMounted(() => {
+  loadStudents()
+  loadClasses()
+})
 </script>
 
 <template>
   <section class="management-page">
+    <!-- Page Header -->
     <header class="management-heading">
       <div>
         <p class="eyebrow">ACADEMIC RECORDS</p>
-        <h1>Students</h1>
-        <p class="page-description">Manage student profiles and contact information.</p>
+        <h1>Student Directory</h1>
+        <p class="page-description">Manage student enrollments, class assignments, and student contact information.</p>
       </div>
-      <button class="primary-button" type="button" @click="openCreateForm"><span aria-hidden="true">＋</span> Add student</button>
+      <button class="primary-button" type="button" @click="openCreateForm">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        Add Student
+      </button>
     </header>
 
-    <div class="summary-card">
-      <span class="summary-icon" aria-hidden="true">♙</span>
-      <div><span class="summary-label">Total students</span><strong>{{ students.length }}</strong></div>
-      <span class="summary-caption">Student records</span>
+    <!-- Summary KPI Cards -->
+    <div class="students-kpi-grid">
+      <article class="summary-card">
+        <div class="summary-icon tone-primary">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+        </div>
+        <div class="summary-details">
+          <span class="summary-label">Total Registered Students</span>
+          <strong>{{ students.length }}</strong>
+        </div>
+        <span class="summary-caption">Active directory</span>
+      </article>
+
+      <article class="summary-card">
+        <div class="summary-icon tone-blue">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            <polyline points="9 22 9 12 15 12 15 22"/>
+          </svg>
+        </div>
+        <div class="summary-details">
+          <span class="summary-label">Active Class Sections</span>
+          <strong>{{ classOptions.length }}</strong>
+        </div>
+        <span class="summary-caption">Current term</span>
+      </article>
+
+      <article class="summary-card">
+        <div class="summary-icon tone-green">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+        </div>
+        <div class="summary-details">
+          <span class="summary-label">Enrollment Standing</span>
+          <strong>100% Verified</strong>
+        </div>
+        <span class="summary-caption">Academic active</span>
+      </article>
     </div>
 
+    <!-- Main Table Card -->
     <div class="records-card">
       <div class="records-toolbar">
-        <div><h2>Student directory</h2><p>Search and update student records.</p></div>
-        <label class="search-box"><span aria-hidden="true">⌕</span><input v-model="search" type="search" placeholder="Search students" aria-label="Search students" /></label>
+        <div>
+          <h2>Student Records</h2>
+          <p>Search, filter, edit or remove student details</p>
+        </div>
+        <div class="search-box">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input v-model="search" type="search" placeholder="Search by name, email, class..." aria-label="Search students" />
+        </div>
       </div>
 
-      <p v-if="pageError" class="state-message error-message" role="alert">{{ pageError }}</p>
-      <div v-if="loading" class="state-message">Loading students…</div>
+      <div v-if="pageError" class="state-message error-message" role="alert">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span>{{ pageError }}</span>
+      </div>
+
+      <div v-if="loading" class="state-message">
+        <div class="spinner"></div>
+        <span>Loading student records...</span>
+      </div>
+
       <div v-else-if="!filteredStudents.length" class="empty-state">
-        <span class="empty-icon" aria-hidden="true">♙</span>
-        <strong>{{ search ? 'No students match your search' : 'No student records yet' }}</strong>
-        <p>{{ search ? 'Try a different name, email, or course.' : 'Add a student to start building your directory.' }}</p>
+        <div class="empty-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+          </svg>
+        </div>
+        <strong>{{ search ? 'No students match your search query' : 'No student records yet' }}</strong>
+        <p>{{ search ? 'Try searching for another student name, email, or class name.' : 'Start organizing your school by registering your first student.' }}</p>
         <button v-if="!search" class="secondary-button" type="button" @click="openCreateForm">Add your first student</button>
       </div>
+
       <div v-else class="table-scroll">
         <table class="records-table">
-          <thead><tr><th>STUDENT</th><th>EMAIL</th><th>COURSE</th><th class="actions-heading">ACTIONS</th></tr></thead>
+          <thead>
+            <tr>
+              <th>STUDENT</th>
+              <th>EMAIL</th>
+              <th>CLASS</th>
+              <th>COURSE</th>
+              <th class="actions-heading">ACTIONS</th>
+            </tr>
+          </thead>
           <tbody>
             <tr v-for="student in filteredStudents" :key="student.id">
-              <td><div class="person-cell"><span class="person-avatar">{{ student.name?.charAt(0)?.toUpperCase() || '?' }}</span><div><strong>{{ student.name }}</strong><small>Student #{{ student.id }}</small></div></div></td>
+              <td>
+                <div class="person-cell">
+                  <span class="person-avatar">{{ student.name?.charAt(0)?.toUpperCase() || '?' }}</span>
+                  <div class="person-info">
+                    <strong>{{ student.name }}</strong>
+                    <small>ID #{{ student.id }}</small>
+                  </div>
+                </div>
+              </td>
               <td>{{ student.email }}</td>
-              <td><span v-if="student.course" class="course-tag">{{ student.course }}</span><span v-else class="muted-value">Not assigned</span></td>
-              <td class="row-actions"><button class="action-button" type="button" @click="openEditForm(student)">Edit</button><button class="action-button danger-action" type="button" @click="removeStudent(student)">Delete</button></td>
+              <td>
+                <span v-if="student.school_class" class="course-tag">{{ student.school_class.name }}</span>
+                <span v-else class="muted-value">Unassigned</span>
+              </td>
+              <td>
+                <span v-if="student.course" class="course-tag">{{ student.course }}</span>
+                <span v-else class="muted-value">General</span>
+              </td>
+              <td class="row-actions">
+                <button class="action-button" type="button" @click="openEditForm(student)">Edit</button>
+                <button class="action-button danger-action" type="button" @click="removeStudent(student)">Delete</button>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
-      <footer v-if="!loading && filteredStudents.length" class="records-footer">Showing {{ filteredStudents.length }} of {{ students.length }} students</footer>
+
+      <footer v-if="!loading && filteredStudents.length" class="records-footer">
+        Showing {{ filteredStudents.length }} of {{ students.length }} student records
+      </footer>
     </div>
 
-    <div v-if="modalOpen" class="modal-backdrop" @click.self="modalOpen = false" @keydown.esc="modalOpen = false">
-      <section class="student-modal" role="dialog" aria-modal="true" :aria-labelledby="'student-modal-title'">
-        <div class="modal-heading"><div><p class="eyebrow">STUDENT DIRECTORY</p><h2 id="student-modal-title">{{ editingId ? 'Edit student' : 'Add a student' }}</h2></div><button class="close-button" type="button" aria-label="Close" @click="modalOpen = false">×</button></div>
-        <p class="modal-description">Enter the student's basic contact and course information.</p>
+    <!-- Modal Form -->
+    <div v-if="modalOpen" class="modal-backdrop" @click.self="modalOpen = false">
+      <section class="student-modal" role="dialog" aria-modal="true" aria-labelledby="student-modal-title">
+        <div class="modal-heading">
+          <div>
+            <p class="eyebrow">STUDENT DIRECTORY</p>
+            <h2 id="student-modal-title">{{ editingId ? 'Edit Student Details' : 'Register New Student' }}</h2>
+          </div>
+          <button class="close-button" type="button" aria-label="Close" @click="modalOpen = false">✕</button>
+        </div>
+
+        <p class="modal-description">Enter the student's legal name, email address, and class assignment.</p>
+
         <form class="student-fields" @submit.prevent="saveStudent">
-          <label>Full name<input v-model="form.name" required maxlength="255" placeholder="e.g. Alex Johnson" /></label>
-          <label>Email address<input v-model="form.email" required type="email" maxlength="255" placeholder="alex@example.com" /></label>
-          <label>Course <span class="optional-label">Optional</span><input v-model="form.course" maxlength="255" placeholder="e.g. Computer Science" /></label>
-          <p v-if="formError" class="error-message" role="alert">{{ formError }}</p>
-          <div class="modal-actions"><button class="secondary-button" type="button" @click="modalOpen = false">Cancel</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? 'Saving…' : editingId ? 'Save changes' : 'Add student' }}</button></div>
+          <label>
+            Full Name
+            <input v-model="form.name" required maxlength="255" placeholder="e.g. Alex Johnson" />
+          </label>
+
+          <label>
+            Email Address
+            <input v-model="form.email" required type="email" maxlength="255" placeholder="alex@example.com" />
+          </label>
+
+          <label>
+            Assigned Class
+            <select v-model="form.school_class_id">
+              <option value="">Not assigned</option>
+              <option v-for="schoolClass in classOptions" :key="schoolClass.id" :value="schoolClass.id">
+                {{ schoolClass.name }}
+              </option>
+            </select>
+          </label>
+
+          <label>
+            Course Track <span class="optional-label">(Optional)</span>
+            <input v-model="form.course" maxlength="255" placeholder="e.g. Science Track" />
+          </label>
+
+          <div v-if="formError" class="error-message" role="alert">
+            {{ formError }}
+          </div>
+
+          <div class="modal-actions">
+            <button class="secondary-button" type="button" @click="modalOpen = false">Cancel</button>
+            <button class="primary-button" type="submit" :disabled="saving">
+              {{ saving ? 'Saving...' : editingId ? 'Update Student' : 'Add Student' }}
+            </button>
+          </div>
         </form>
       </section>
     </div>
@@ -150,5 +319,142 @@ onMounted(loadStudents)
 </template>
 
 <style scoped>
-.management-page{--green:#274332;--ink:#27332b;--muted:#7b857b;--line:#e8ece6;color:var(--ink)}.management-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:25px}.eyebrow{margin:0 0 7px;color:#768671;font-size:9px;font-weight:750;letter-spacing:1.45px}.management-heading h1{margin:0;font-size:27px;font-weight:650;letter-spacing:-.8px}.page-description{margin:6px 0 0;color:var(--muted);font-size:12px}.primary-button,.secondary-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:6px;min-height:39px;padding:0 14px;background:var(--green);color:#fff;font-size:11px;font-weight:650;cursor:pointer}.primary-button:hover{background:#345941}.primary-button:disabled{opacity:.6;cursor:wait}.primary-button span{font-size:16px}.summary-card{display:flex;align-items:center;gap:14px;width:min(100%,260px);padding:16px 18px;border:1px solid var(--line);border-radius:9px;background:#fff}.summary-icon{display:grid;place-items:center;width:39px;height:39px;border-radius:9px;background:#edf2e6;color:#46613f;font-size:20px}.summary-card>div{display:flex;flex-direction:column;gap:2px}.summary-label{color:var(--muted);font-size:10px}.summary-card strong{font-size:21px;font-weight:700}.summary-caption{margin-left:auto;color:#9aa298;font-size:9px}.records-card{margin-top:19px;border:1px solid var(--line);border-radius:9px;background:#fff;overflow:hidden}.records-toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:19px 20px;border-bottom:1px solid #edf0eb}.records-toolbar h2{margin:0;font-size:14px;font-weight:650}.records-toolbar p{margin:5px 0 0;color:var(--muted);font-size:10px}.search-box{display:flex;align-items:center;gap:8px;width:235px;height:36px;padding:0 10px;border:1px solid var(--line);border-radius:6px;color:#839080}.search-box>span{font-size:19px}.search-box input{width:100%;border:0;outline:0;color:var(--ink);font-size:11px}.search-box input::placeholder{color:#a2aaa0}.table-scroll{overflow-x:auto}.records-table{width:100%;border-collapse:collapse}.records-table th{height:39px;padding:0 17px;background:#fafbf9;color:#899187;font-size:9px;letter-spacing:.75px;font-weight:700;text-align:left;white-space:nowrap}.records-table td{height:62px;padding:8px 17px;border-bottom:1px solid #f0f2ee;color:#586256;font-size:11px;white-space:nowrap}.records-table tbody tr:last-child td{border-bottom:0}.person-cell{display:flex;align-items:center;gap:10px}.person-cell>div{display:flex;flex-direction:column;gap:3px}.person-cell strong{color:#313a32;font-size:11px;font-weight:620}.person-cell small{color:#9aa197;font-size:9px}.person-avatar{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#e9efdf;color:#4b6345;font-size:11px;font-weight:700}.course-tag{display:inline-flex;padding:4px 8px;border-radius:20px;background:#f1f4ed;color:#68745f;font-size:9px}.muted-value{color:#a0a69e}.actions-heading{text-align:right!important}.row-actions{text-align:right;white-space:nowrap}.action-button{margin-left:6px;padding:6px 8px;border:0;border-radius:4px;background:transparent;color:#45634a;font-size:10px;cursor:pointer}.action-button:hover{background:#f0f4ed}.danger-action{color:#a24c45}.danger-action:hover{background:#fbefee}.records-footer{padding:12px 18px;border-top:1px solid #edf0eb;color:#899187;font-size:10px}.state-message{padding:28px 20px;color:var(--muted);font-size:12px}.error-message{color:#aa4842}.empty-state{display:flex;align-items:center;flex-direction:column;padding:42px 20px;text-align:center}.empty-icon{display:grid;place-items:center;width:45px;height:45px;border-radius:50%;background:#f1f4ed;color:#607356;font-size:22px}.empty-state strong{margin-top:13px;font-size:12px}.empty-state p{margin:6px 0 16px;color:var(--muted);font-size:10px}.secondary-button{border:1px solid #dfe6dc;background:#fff;color:#425943}.secondary-button:hover{background:#f7f9f5}.modal-backdrop{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:20px;background:#18231db8}.student-modal{width:min(100%,460px);padding:23px;border:1px solid var(--line);border-radius:11px;background:#fff;box-shadow:0 20px 70px #0c1b1233}.modal-heading{display:flex;align-items:flex-start;justify-content:space-between}.modal-heading h2{margin:0;font-size:20px;font-weight:650;letter-spacing:-.4px}.close-button{width:30px;height:30px;border:0;border-radius:6px;background:#f4f6f2;color:#687267;font-size:20px;cursor:pointer}.modal-description{margin:8px 0 20px;color:var(--muted);font-size:11px}.student-fields{display:grid;gap:13px}.student-fields label{display:grid;gap:6px;color:#4b554a;font-size:10px;font-weight:650}.student-fields input{height:38px;width:100%;padding:0 10px;border:1px solid #dfe5dc;border-radius:5px;outline:0;color:var(--ink);font-size:11px}.student-fields input:focus{border-color:#829878;box-shadow:0 0 0 3px #8298781c}.optional-label{margin-left:4px;color:#9aa197;font-weight:400}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:7px}@media(max-width:650px){.management-heading{align-items:flex-start}.management-heading h1{font-size:23px}.summary-caption{display:none}.records-toolbar{align-items:flex-start;flex-direction:column}.search-box{width:100%}.records-table th,.records-table td{padding-right:12px;padding-left:12px}.row-actions .action-button{padding-right:4px;padding-left:4px}}
+.management-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.management-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  background-color: #ffffff;
+  padding: 24px 28px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: var(--color-primary);
+  margin-bottom: 6px;
+}
+
+.management-heading h1 {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.6px;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.page-description {
+  margin: 6px 0 0 0;
+  color: var(--color-text-muted);
+  font-size: 13.5px;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 280px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-bg);
+  color: var(--color-text-subtle);
+  transition: all 0.15s ease;
+}
+
+.search-box:focus-within {
+  border-color: var(--color-primary);
+  background-color: #ffffff;
+  box-shadow: 0 0 0 3px var(--color-primary-ring);
+  color: var(--color-primary);
+}
+
+.search-box input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.person-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.person-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.person-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.person-info strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.person-info small {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+.actions-heading {
+  text-align: right !important;
+}
+
+.row-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.state-message {
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 13.5px;
+}
+
+.error-message {
+  color: var(--color-danger);
+  background-color: var(--color-danger-bg);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  margin: 10px 0;
+}
+
+.optional-label {
+  color: var(--color-text-subtle);
+  font-weight: 400;
+  font-size: 11.5px;
+}
 </style>

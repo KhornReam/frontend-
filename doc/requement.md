@@ -275,7 +275,7 @@ npm run dev
 
 Open the local URL printed by Vite in your terminal, commonly:
 
-`http://localhost:5173`
+`http://localhost:5143`
 
 If Axios is used for API requests, install it with:
 
