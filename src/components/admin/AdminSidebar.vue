@@ -6,26 +6,69 @@ import {
   logout,
   switchRole,
 } from '../../services/authService.js'
+import { getStudentReportForUser } from '../../services/academicReportService.js'
+import { getClasses } from '../../services/classService.js'
+import { getBlockedEmails, getUnreadSecurityAlertsCount } from '../../services/loginSecurityService.js'
 import { getRolePermissions } from '../../services/permissionService.js'
+import { getStudents } from '../../services/studentService.js'
+import { getSubjects } from '../../services/subjectService.js'
+import { getTeachers } from '../../services/teacherService.js'
+
+const props = defineProps({
+  collapsed: { type: Boolean, default: false },
+  mobileOpen: { type: Boolean, default: false },
+})
+
+const emit = defineEmits(['toggle-collapse', 'close-mobile'])
 
 const router = useRouter()
 const currentUser = ref(getCurrentUser())
 const permissions = ref(getRolePermissions())
 const roleMenuOpen = ref(false)
+const liveCounts = ref({ students: '', teachers: '', classes: '', subjects: '' })
+const blockedEmailCount = ref(getBlockedEmails().length)
+const unreadAlertCount = ref(getUnreadSecurityAlertsCount())
+
+function refreshSecurityCounts() {
+  blockedEmailCount.value = getBlockedEmails().length
+  unreadAlertCount.value = getUnreadSecurityAlertsCount()
+}
+
+async function loadSidebarCounts() {
+  const [stuRes, tchRes, clsRes, subRes] = await Promise.allSettled([
+    getStudents(),
+    getTeachers(),
+    getClasses(),
+    getSubjects(),
+  ])
+  liveCounts.value = {
+    students: stuRes.status === 'fulfilled' && Array.isArray(stuRes.value.data) ? String(stuRes.value.data.length) : '',
+    teachers: tchRes.status === 'fulfilled' && Array.isArray(tchRes.value.data) ? String(tchRes.value.data.length) : '',
+    classes: clsRes.status === 'fulfilled' && Array.isArray(clsRes.value.data) ? String(clsRes.value.data.length) : '',
+    subjects: subRes.status === 'fulfilled' && Array.isArray(subRes.value.data) ? String(subRes.value.data.length) : '',
+  }
+}
 
 function refreshAuthState() {
   currentUser.value = getCurrentUser()
   permissions.value = getRolePermissions()
+  loadSidebarCounts()
 }
 
 onMounted(() => {
+  loadSidebarCounts()
+  refreshSecurityCounts()
   window.addEventListener('sms-auth-changed', refreshAuthState)
   window.addEventListener('sms-permissions-updated', refreshAuthState)
+  window.addEventListener('sms-users-updated', loadSidebarCounts)
+  window.addEventListener('sms-security-alerts-updated', refreshSecurityCounts)
 })
 
 onUnmounted(() => {
   window.removeEventListener('sms-auth-changed', refreshAuthState)
   window.removeEventListener('sms-permissions-updated', refreshAuthState)
+  window.removeEventListener('sms-users-updated', loadSidebarCounts)
+  window.removeEventListener('sms-security-alerts-updated', refreshSecurityCounts)
 })
 
 // Navigation computed by Role & Feature Permissions
@@ -36,7 +79,7 @@ const mainNavigation = computed(() => {
   if (role === 'student') {
     const list = [{ label: 'My Overview', to: '/', icon: 'dashboard' }]
     if (p.student?.view_curriculum?.enabled) {
-      list.push({ label: 'My Subjects', to: '/subjects', icon: 'subjects', badge: '6 Enrolled' })
+      list.push({ label: 'My Subjects', to: '/subjects', icon: 'subjects', badge: liveCounts.value.subjects || undefined })
     }
     return list
   }
@@ -44,10 +87,10 @@ const mainNavigation = computed(() => {
   if (role === 'teacher') {
     const list = [{ label: 'Faculty Dashboard', to: '/', icon: 'dashboard' }]
     if (p.teacher?.view_classes?.enabled) {
-      list.push({ label: 'Class Sections', to: '/classes', icon: 'classes', badge: '3 Assigned' })
+      list.push({ label: 'Class Sections', to: '/classes', icon: 'classes', badge: liveCounts.value.classes || undefined })
     }
     if (p.teacher?.view_students?.enabled) {
-      list.push({ label: 'Students Roster', to: '/students', icon: 'students', badge: '36' })
+      list.push({ label: 'Students Roster', to: '/students', icon: 'students', badge: liveCounts.value.students || undefined })
     }
     list.push({ label: 'Curriculum Subjects', to: '/subjects', icon: 'subjects' })
     return list
@@ -56,10 +99,10 @@ const mainNavigation = computed(() => {
   // Admin
   return [
     { label: 'Dashboard', to: '/', icon: 'dashboard' },
-    { label: 'Students', to: '/students', icon: 'students', badge: '1,284' },
-    { label: 'Teachers', to: '/teachers', icon: 'teachers', badge: '64' },
-    { label: 'Classes', to: '/classes', icon: 'classes', badge: '38' },
-    { label: 'Subjects', to: '/subjects', icon: 'subjects', badge: '9' },
+    { label: 'Students', to: '/students', icon: 'students', badge: liveCounts.value.students || undefined },
+    { label: 'Teachers', to: '/teachers', icon: 'teachers', badge: liveCounts.value.teachers || undefined },
+    { label: 'Classes', to: '/classes', icon: 'classes', badge: liveCounts.value.classes || undefined },
+    { label: 'Subjects', to: '/subjects', icon: 'subjects', badge: liveCounts.value.subjects || undefined },
   ]
 })
 
@@ -68,12 +111,23 @@ const academicNavigation = computed(() => {
   const p = permissions.value
 
   if (role === 'student') {
+    const mine = getStudentReportForUser(currentUser.value)[0]
     const list = []
     if (p.student?.view_grades?.enabled) {
-      list.push({ label: 'My Grades & Transcripts', to: '/reports', icon: 'reports', badge: 'GPA 3.95' })
+      list.push({
+        label: 'My Grades & Transcripts',
+        to: '/reports',
+        icon: 'reports',
+        badge: mine ? `GPA ${mine.unweightedGpa}` : 'My Grades',
+      })
     }
     if (p.student?.view_attendance?.enabled) {
-      list.push({ label: 'My Attendance Record', to: '/attendance', icon: 'attendance', badge: '98.4%' })
+      list.push({
+        label: 'My Attendance Record',
+        to: '/attendance',
+        icon: 'attendance',
+        badge: mine ? mine.attendance_rate : 'My Log',
+      })
     }
     return list
   }
@@ -104,8 +158,16 @@ const managementNavigation = computed(() => {
   const role = currentUser.value?.role || 'admin'
   if (role !== 'admin') return []
 
+  const securityBadge =
+    blockedEmailCount.value > 0
+      ? `${blockedEmailCount.value} Locked`
+      : unreadAlertCount.value > 0
+        ? String(unreadAlertCount.value)
+        : undefined
+
   return [
     { label: 'Users & Roles', to: '/users-roles', icon: 'users', badge: 'Admin' },
+    { label: 'User Login', to: '/user-login', icon: 'user-login', badge: securityBadge },
     { label: 'Automations', to: '/automations', icon: 'automations' },
     { label: 'Settings', to: '/settings', icon: 'settings' },
   ]
@@ -125,35 +187,56 @@ function signOut() {
 </script>
 
 <template>
-  <aside class="sidebar admin-sidebar">
-    <!-- Brand -->
-    <RouterLink class="brand" to="/" aria-label="StudentHub home">
-      <div class="brand-mark">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 10v6M2 10l10-5 10 5-10 5z"/>
-          <path d="M6 12v5c3 3 9 3 12 0v-5"/>
-        </svg>
-      </div>
-      <div>
-        <span class="brand-name">StudentHub</span>
-      </div>
-      <span
-        class="brand-badge"
-        :class="{
-          'badge-admin': currentUser.role === 'admin',
-          'badge-teacher': currentUser.role === 'teacher',
-          'badge-student': currentUser.role === 'student',
-        }"
+  <aside
+    class="sidebar admin-sidebar"
+    :class="{ 'is-collapsed': props.collapsed, 'mobile-open': props.mobileOpen }"
+  >
+    <!-- Brand + Collapse Toggle Control -->
+    <div class="brand-header-row">
+      <RouterLink class="brand" to="/" aria-label="StudentHub home">
+        <div class="brand-mark">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 10v6M2 10l10-5 10 5-10 5z"/>
+            <path d="M6 12v5c3 3 9 3 12 0v-5"/>
+          </svg>
+        </div>
+        <div v-if="!props.collapsed" class="brand-copy">
+          <span class="brand-name">StudentHub</span>
+        </div>
+        <span
+          v-if="!props.collapsed"
+          class="brand-badge"
+          :class="{
+            'badge-admin': currentUser.role === 'admin',
+            'badge-teacher': currentUser.role === 'teacher',
+            'badge-student': currentUser.role === 'student',
+          }"
+        >
+          {{ currentUser.role === 'admin' ? 'Admin' : currentUser.role === 'teacher' ? 'Faculty' : 'Student' }}
+        </span>
+      </RouterLink>
+
+      <button
+        type="button"
+        class="sidebar-collapse-btn"
+        :title="props.collapsed ? 'Open sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)'"
+        :aria-label="props.collapsed ? 'Open sidebar' : 'Collapse sidebar'"
+        @click="emit('toggle-collapse')"
       >
-        {{ currentUser.role === 'admin' ? 'Admin' : currentUser.role === 'teacher' ? 'Faculty' : 'Student' }}
-      </span>
-    </RouterLink>
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <polyline v-if="props.collapsed" points="9 18 15 12 9 6"/>
+          <polyline v-else points="15 18 9 12 15 6"/>
+        </svg>
+      </button>
+    </div>
 
     <!-- Navigation Scroll Area -->
     <nav class="sidebar-nav" aria-label="Admin navigation">
       <!-- Section 1 -->
       <p class="nav-label">
-        {{ currentUser.role === 'student' ? 'STUDENT PORTAL' : currentUser.role === 'teacher' ? 'TEACHER WORKSPACE' : 'MAIN WORKSPACE' }}
+        <span v-if="!props.collapsed">
+          {{ currentUser.role === 'student' ? 'STUDENT PORTAL' : currentUser.role === 'teacher' ? 'TEACHER WORKSPACE' : 'MAIN WORKSPACE' }}
+        </span>
       </p>
       <RouterLink
         v-for="item in mainNavigation"
@@ -164,6 +247,7 @@ function signOut() {
       >
         <a
           :href="href"
+          :title="props.collapsed ? item.label : ''"
           :class="['nav-link', (item.to === '/' ? isExactActive : isActive) && 'router-link-active']"
           @click="navigate"
         >
@@ -205,7 +289,9 @@ function signOut() {
       <!-- Section 2: Academics & Tracking (if permitted) -->
       <template v-if="academicNavigation.length">
         <p class="nav-label">
-          {{ currentUser.role === 'student' ? 'ACADEMIC RECORDS' : 'ACADEMICS & TRACKING' }}
+          <span v-if="!props.collapsed">
+            {{ currentUser.role === 'student' ? 'ACADEMIC RECORDS' : 'ACADEMICS & TRACKING' }}
+          </span>
         </p>
         <RouterLink
           v-for="item in academicNavigation"
@@ -214,7 +300,12 @@ function signOut() {
           custom
           v-slot="{ href, navigate, isActive }"
         >
-          <a :href="href" :class="['nav-link', isActive && 'router-link-active']" @click="navigate">
+          <a
+            :href="href"
+            :title="props.collapsed ? item.label : ''"
+            :class="['nav-link', isActive && 'router-link-active']"
+            @click="navigate"
+          >
             <!-- Attendance SVG -->
             <svg v-if="item.icon === 'attendance'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
@@ -242,7 +333,9 @@ function signOut() {
 
       <!-- Section 3: System & Config (Admin only) -->
       <template v-if="managementNavigation.length">
-        <p class="nav-label">SYSTEM & CONFIG</p>
+        <p class="nav-label">
+          <span v-if="!props.collapsed">SYSTEM & CONFIG</span>
+        </p>
         <RouterLink
           v-for="item in managementNavigation"
           :key="item.to"
@@ -250,10 +343,21 @@ function signOut() {
           custom
           v-slot="{ href, navigate, isActive }"
         >
-          <a :href="href" :class="['nav-link', isActive && 'router-link-active']" @click="navigate">
+          <a
+            :href="href"
+            :title="props.collapsed ? item.label : ''"
+            :class="['nav-link', isActive && 'router-link-active']"
+            @click="navigate"
+          >
             <!-- Users SVG -->
             <svg v-if="item.icon === 'users'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <!-- User Login SVG -->
+            <svg v-else-if="item.icon === 'user-login'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+              <polyline points="10 17 15 12 10 7"/>
+              <line x1="15" y1="12" x2="3" y2="12"/>
             </svg>
             <!-- Automations SVG -->
             <svg v-else-if="item.icon === 'automations'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -520,6 +624,98 @@ function signOut() {
 
 .animated-signout {
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.brand-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 14px 16px 18px;
+  border-bottom: 1px solid var(--color-sidebar-border);
+  gap: 8px;
+  min-height: 76px;
+}
+
+.brand-header-row .brand {
+  padding: 0;
+  border-bottom: none;
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-collapse-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(30, 41, 59, 0.7);
+  color: #94a3b8;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.16s ease;
+}
+
+.sidebar-collapse-btn:hover {
+  background: rgba(99, 102, 241, 0.22);
+  border-color: rgba(129, 140, 248, 0.5);
+  color: #ffffff;
+}
+
+/* Smooth Collapsible Rail State */
+.admin-sidebar {
+  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1), left 0.25s ease;
+}
+
+.admin-sidebar.is-collapsed {
+  width: 78px;
+}
+
+.admin-sidebar.is-collapsed .brand-header-row {
+  flex-direction: column;
+  justify-content: center;
+  padding: 14px 8px;
+  gap: 10px;
+}
+
+.admin-sidebar.is-collapsed .brand {
+  justify-content: center;
+}
+
+.admin-sidebar.is-collapsed .nav-label {
+  padding: 12px 14px 8px;
+}
+
+.admin-sidebar.is-collapsed .nav-label::after {
+  content: "";
+  display: block;
+  height: 1px;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.admin-sidebar.is-collapsed .nav-link {
+  justify-content: center;
+  padding: 11px;
+}
+
+.admin-sidebar.is-collapsed .nav-text,
+.admin-sidebar.is-collapsed .nav-badge-count,
+.admin-sidebar.is-collapsed .profile-copy {
+  display: none;
+}
+
+.admin-sidebar.is-collapsed .sidebar-bottom {
+  flex-direction: column;
+  justify-content: center;
+  padding: 14px 10px;
+  gap: 10px;
+}
+
+.admin-sidebar.is-collapsed .role-popover {
+  left: 84px;
+  right: auto;
+  width: 230px;
 }
 
 .animated-signout:hover {

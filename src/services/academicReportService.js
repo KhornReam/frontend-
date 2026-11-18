@@ -314,3 +314,48 @@ export function updateStudentGrade(studentId, courseCode, newScore) {
   }
   return getAcademicReports()
 }
+
+/**
+ * Strictly returns ONLY the single academic report belonging to the given student user.
+ * If the student was newly created in Users & Roles (e.g. "Loma"), automatically provisions
+ * their personal academic transcript record under their exact name and email.
+ */
+export function getStudentReportForUser(user) {
+  if (!user) return []
+  const targetName = (user.name || '').trim().toLowerCase()
+  const targetEmail = (user.email || '').trim().toLowerCase()
+
+  let all = getAcademicReports()
+  let match = all.find(
+    (s) =>
+      (targetEmail && s.email?.toLowerCase() === targetEmail) ||
+      (targetName && s.name?.toLowerCase() === targetName),
+  )
+
+  if (!match && targetName) {
+    const list = getLocalStudentsWithGrades()
+    const nextId = list.length ? Math.max(...list.map((s) => Number(s.id) || 0)) + 1 : 100
+    const newRecord = {
+      id: nextId,
+      student_id: user.id || nextId,
+      name: user.name.trim(),
+      email: user.email || `${targetName.replace(/\s+/g, '.')}@school.edu`,
+      class_name: user.department || 'Grade 10 - A',
+      attendance_rate: '96.0%',
+      standing: 'Honor Roll (Cum Laude)',
+      courses: [
+        { code: 'MAT-101', subject: 'Mathematics', credits: 4, score: 91, isAp: false, isHonors: true, remark: 'Strong analytical progress.' },
+        { code: 'ENG-201', subject: 'English Literature', credits: 3, score: 89, isAp: false, isHonors: false, remark: 'Clear written expression.' },
+        { code: 'CHEM-301', subject: 'Chemistry', credits: 4, score: 92, isAp: false, isHonors: true, remark: 'Excellent lab precision.' },
+        { code: 'CS-401', subject: 'Computer Science', credits: 4, score: 95, isAp: true, isHonors: false, remark: 'Outstanding project execution.' },
+        { code: 'HIST-102', subject: 'World History', credits: 3, score: 88, isAp: false, isHonors: false, remark: 'Thoughtful seminar contributions.' },
+      ],
+    }
+    list.push(newRecord)
+    saveLocalStudentsWithGrades(list)
+    all = getAcademicReports()
+    match = all.find((s) => s.id === nextId)
+  }
+
+  return match ? [match] : []
+}

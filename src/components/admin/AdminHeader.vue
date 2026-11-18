@@ -2,6 +2,21 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getCurrentUser, logout, switchRole } from '../../services/authService.js'
+import {
+  formatRelativeTime,
+  getBlockedEmails,
+  getSecurityAlerts,
+  markAllSecurityAlertsRead,
+  markSecurityAlertRead,
+  unblockEmail,
+} from '../../services/loginSecurityService.js'
+
+const props = defineProps({
+  sidebarCollapsed: { type: Boolean, default: false },
+  mobileSidebarOpen: { type: Boolean, default: false },
+})
+
+const emit = defineEmits(['toggle-sidebar'])
 
 const route = useRoute()
 const router = useRouter()
@@ -19,48 +34,80 @@ const currentTerm = ref('Term 2 (2026–2027)')
 const termDropdownOpen = ref(false)
 const terms = ['Term 1 (2026–2027)', 'Term 2 (2026–2027)', 'Term 3 (2026–2027)', 'Summer Session 2026']
 
-// Notifications
+// Notifications & Real-Time Admin Security Alerts
 const notificationsOpen = ref(false)
-const notifications = ref([
+const securityAlerts = ref(getSecurityAlerts())
+const blockedEmails = ref(getBlockedEmails())
+
+function refreshSecurityAlerts() {
+  securityAlerts.value = getSecurityAlerts()
+  blockedEmails.value = getBlockedEmails()
+}
+
+const baseNotifications = ref([
   {
-    id: 1,
+    id: 'sys-1',
     title: 'New Student Enrolled',
     message: 'Olivia Martin was enrolled in Grade 10 - A.',
     time: '12m ago',
     unread: true,
     tone: 'emerald',
     icon: 'user',
+    isSecurity: false,
   },
   {
-    id: 2,
+    id: 'sys-2',
     title: 'Daily Attendance Report',
     message: '94.6% school attendance recorded for today.',
     time: '45m ago',
     unread: true,
     tone: 'primary',
     icon: 'check',
+    isSecurity: false,
   },
   {
-    id: 3,
+    id: 'sys-3',
     title: 'Cloud Backup Succeeded',
     message: 'Encrypted database snapshot saved to cloud.',
     time: '3h ago',
     unread: false,
     tone: 'sky',
     icon: 'database',
-  },
-  {
-    id: 4,
-    title: 'Automated SMS Sent',
-    message: 'Sent 18 tardy notifications to parent contacts.',
-    time: '4h ago',
-    unread: false,
-    tone: 'amber',
-    icon: 'mail',
+    isSecurity: false,
   },
 ])
 
+const notifications = computed(() => {
+  const adminAlerts =
+    currentUser.value?.role === 'admin'
+      ? securityAlerts.value.slice(0, 12).map((alert) => {
+          const currentlyBlocked = blockedEmails.value.some((b) => b.email === alert.email)
+          return {
+            id: alert.id,
+            title: alert.title,
+            message: alert.message,
+            email: alert.email,
+            accountName: alert.accountName,
+            reason: alert.reason,
+            severity: alert.severity,
+            time: formatRelativeTime(alert.timestamp),
+            unread: alert.unread && !alert.resolved,
+            resolved: alert.resolved,
+            isSecurity: true,
+            isCurrentlyBlocked: currentlyBlocked,
+          }
+        })
+      : []
+
+  return [...adminAlerts, ...baseNotifications.value]
+})
+
 const unreadCount = computed(() => notifications.value.filter((n) => n.unread).length)
+const hasCriticalSecurityUnread = computed(
+  () =>
+    currentUser.value?.role === 'admin' &&
+    securityAlerts.value.some((a) => a.unread && !a.resolved),
+)
 
 // Quick Create Dropdown
 const quickCreateOpen = ref(false)
@@ -84,6 +131,7 @@ const searchItems = [
   { name: 'School Automations', category: 'System', route: '/automations' },
   { name: 'Exams & Gradebook', category: 'Academic', route: '/exams-scores' },
   { name: 'Users & Roles Management', category: 'Access', route: '/users-roles' },
+  { name: 'User Login & Security Monitor', category: 'Security', route: '/user-login' },
   { name: 'System Settings', category: 'System', route: '/settings' },
 ]
 
@@ -104,7 +152,22 @@ function navigateTo(path) {
 }
 
 function markAllNotificationsRead() {
-  notifications.value.forEach((n) => (n.unread = false))
+  baseNotifications.value.forEach((n) => (n.unread = false))
+  if (currentUser.value?.role === 'admin') {
+    markAllSecurityAlertsRead()
+    refreshSecurityAlerts()
+  }
+}
+
+function handleQuickUnblock(email) {
+  unblockEmail(email, currentUser.value?.name || 'Administrator')
+  refreshSecurityAlerts()
+}
+
+function openSecurityTab(alertId) {
+  if (alertId) markSecurityAlertRead(alertId)
+  notificationsOpen.value = false
+  router.push('/user-login')
 }
 
 function handleKeyDown(e) {
@@ -134,20 +197,39 @@ function handleQuickRoleSwitch(roleKey) {
 }
 
 onMounted(() => {
+  refreshSecurityAlerts()
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('sms-auth-changed', updateAuth)
+  window.addEventListener('sms-security-alerts-updated', refreshSecurityAlerts)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('sms-auth-changed', updateAuth)
+  window.removeEventListener('sms-security-alerts-updated', refreshSecurityAlerts)
 })
 </script>
 
 <template>
   <header class="topbar admin-header">
-    <!-- Left: Breadcrumb & Title -->
+    <!-- Left: Sidebar Toggle, Breadcrumb & Title -->
     <div class="topbar-left">
+      <button
+        type="button"
+        class="sidebar-toggle-btn"
+        :class="{ 'is-collapsed': props.sidebarCollapsed }"
+        :title="props.sidebarCollapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)'"
+        :aria-label="props.sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+        @click="emit('toggle-sidebar')"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <line x1="9" y1="3" x2="9" y2="21"/>
+          <path v-if="props.sidebarCollapsed" d="m14 9 3 3-3 3"/>
+          <path v-else d="m16 15-3-3 3-3"/>
+        </svg>
+      </button>
+
       <div class="breadcrumb">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="breadcrumb-icon">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
@@ -198,8 +280,8 @@ onUnmounted(() => {
         <kbd class="search-kbd">Ctrl K</kbd>
       </div>
 
-      <!-- Quick Create Dropdown -->
-      <div class="header-menu-container">
+      <!-- Quick Create Dropdown (Admin & Teacher only) -->
+      <div v-if="currentUser.role !== 'student'" class="header-menu-container">
         <button
           type="button"
           class="quick-add-btn"
@@ -272,7 +354,7 @@ onUnmounted(() => {
         <button
           type="button"
           class="icon-button notification-btn"
-          :class="{ active: notificationsOpen }"
+          :class="{ active: notificationsOpen, 'has-security-alert': hasCriticalSecurityUnread }"
           @click="notificationsOpen = !notificationsOpen"
           aria-label="View notifications"
         >
@@ -286,7 +368,7 @@ onUnmounted(() => {
         <div v-if="notificationsOpen" class="notifications-dropdown">
           <div class="notifications-header">
             <div>
-              <strong>Notifications</strong>
+              <strong>Notifications & Alerts</strong>
               <small>{{ unreadCount }} unread</small>
             </div>
             <button type="button" class="mark-read-btn" @click="markAllNotificationsRead">
@@ -299,21 +381,61 @@ onUnmounted(() => {
               v-for="notif in notifications"
               :key="notif.id"
               class="notification-item"
-              :class="{ unread: notif.unread }"
+              :class="{
+                unread: notif.unread,
+                'is-security-critical': notif.isSecurity && notif.severity === 'critical',
+                'is-security-warning': notif.isSecurity && notif.severity === 'warning',
+              }"
             >
               <div class="notif-dot-wrap">
-                <span v-if="notif.unread" class="notif-unread-dot"></span>
+                <span
+                  v-if="notif.unread"
+                  class="notif-unread-dot"
+                  :class="{ 'dot-danger': notif.isSecurity }"
+                ></span>
               </div>
               <div class="notif-content">
-                <strong>{{ notif.title }}</strong>
+                <div class="notif-title-line">
+                  <strong>{{ notif.title }}</strong>
+                  <span v-if="notif.isSecurity" class="notif-sec-badge" :class="notif.severity">
+                    {{ notif.severity === 'critical' ? 'Blocked' : 'Alert' }}
+                  </span>
+                </div>
                 <p>{{ notif.message }}</p>
-                <small>{{ notif.time }}</small>
+                <div class="notif-meta-row">
+                  <small>{{ notif.time }}</small>
+                  <div v-if="notif.isSecurity" class="notif-sec-actions">
+                    <button
+                      v-if="notif.isCurrentlyBlocked"
+                      type="button"
+                      class="notif-unblock-btn"
+                      @click.stop="handleQuickUnblock(notif.email)"
+                    >
+                      Unblock
+                    </button>
+                    <button
+                      type="button"
+                      class="notif-inspect-link"
+                      @click.stop="openSecurityTab(notif.id)"
+                    >
+                      Details
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
 
           <div class="notifications-footer">
-            <button type="button" class="view-all-link" @click="navigateTo('/automations')">
+            <button
+              v-if="currentUser.role === 'admin'"
+              type="button"
+              class="view-all-link"
+              @click="openSecurityTab()"
+            >
+              Open Security Alerts & Blocked Emails →
+            </button>
+            <button v-else type="button" class="view-all-link" @click="navigateTo('/automations')">
               View system activity log →
             </button>
           </div>
@@ -772,6 +894,22 @@ onUnmounted(() => {
   background-color: rgba(238, 242, 255, 0.4);
 }
 
+.notification-item.is-security-critical {
+  background-color: rgba(254, 242, 242, 0.72);
+  border-left: 3px solid #dc2626;
+}
+
+.notification-item.is-security-warning {
+  background-color: rgba(255, 251, 235, 0.72);
+  border-left: 3px solid #d97706;
+}
+
+.notification-btn.has-security-alert {
+  border-color: #fca5a5;
+  background-color: #fef2f2;
+  color: #dc2626;
+}
+
 .notif-dot-wrap {
   width: 8px;
   padding-top: 6px;
@@ -783,6 +921,84 @@ onUnmounted(() => {
   height: 8px;
   border-radius: 50%;
   background-color: var(--color-primary);
+}
+
+.notif-unread-dot.dot-danger {
+  background-color: #dc2626;
+}
+
+.notif-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.notif-title-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.notif-sec-badge {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.notif-sec-badge.critical {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.notif-sec-badge.warning {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.notif-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.notif-sec-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.notif-unblock-btn {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #059669;
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+}
+
+.notif-unblock-btn:hover {
+  background: #047857;
+}
+
+.notif-inspect-link {
+  font-size: 11px;
+  font-weight: 700;
+  color: #4f46e5;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.notif-inspect-link:hover {
+  text-decoration: underline;
 }
 
 .notif-content strong {
@@ -1170,6 +1386,33 @@ onUnmounted(() => {
 .avatar-admin { background: #8b5cf6 !important; color: white !important; }
 .avatar-teacher { background: #3b82f6 !important; color: white !important; }
 .avatar-student { background: #10b981 !important; color: white !important; }
+
+.sidebar-toggle-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  border: 1px solid #e2e8f0;
+  background-color: #ffffff;
+  color: #475569;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.16s ease;
+}
+
+.sidebar-toggle-btn:hover {
+  background-color: #f8fafc;
+  border-color: #cbd5e1;
+  color: #4f46e5;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.sidebar-toggle-btn.is-collapsed {
+  background-color: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4f46e5;
+}
 
 @media (max-width: 900px) {
   .term-selector-wrap,

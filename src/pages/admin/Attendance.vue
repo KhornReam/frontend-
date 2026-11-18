@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { getClasses } from '../../services/classService.js'
 import { getStudents } from '../../services/studentService.js'
 import {
@@ -11,6 +11,16 @@ import {
   updateAttendance,
 } from '../../services/attendanceService.js'
 import { exportToExcel, exportToPdf } from '../../utils/exportUtils.js'
+import { getCurrentUser } from '../../services/authService.js'
+import { hasPermission } from '../../services/permissionService.js'
+
+const currentUser = ref(getCurrentUser())
+const isStudentRole = computed(() => currentUser.value?.role === 'student')
+const canEditAttendance = computed(() => {
+  if (currentUser.value?.role === 'admin') return true
+  if (currentUser.value?.role === 'teacher') return hasPermission('teacher', 'manage_attendance')
+  return false
+})
 
 const selectedDate = ref(getTodayString())
 const activeClassFilter = ref('all')
@@ -65,6 +75,7 @@ const isToday = computed(() => selectedDate.value === getTodayString())
 async function loadData() {
   loading.value = true
   try {
+    currentUser.value = getCurrentUser()
     const [attRes, stuRes, clsRes] = await Promise.allSettled([
       getAttendances({ date: selectedDate.value }),
       getStudents(),
@@ -72,7 +83,29 @@ async function loadData() {
     ])
 
     if (attRes.status === 'fulfilled') {
-      attendances.value = attRes.value.data
+      const rawList = attRes.value.data || []
+      if (currentUser.value?.role === 'student') {
+        // Strictly filter to ONLY the logged-in student's own name
+        const myName = (currentUser.value.name || '').trim().toLowerCase()
+        const mine = rawList.filter((a) => a.student_name?.trim().toLowerCase() === myName)
+        if (mine.length > 0) {
+          attendances.value = mine
+        } else {
+          attendances.value = [
+            {
+              id: `self-${selectedDate.value}`,
+              student_name: currentUser.value.name,
+              class_name: currentUser.value.department || 'Grade 10 - A',
+              date: selectedDate.value,
+              check_in_time: '07:55 AM',
+              status: 'Present',
+              remarks: 'Verified personal check-in',
+            },
+          ]
+        }
+      } else {
+        attendances.value = rawList
+      }
     }
     if (stuRes.status === 'fulfilled') {
       enrolledStudents.value = stuRes.value.data || []
@@ -150,6 +183,7 @@ const presentRate = computed(() => {
 
 // Instant row status toggle
 async function setStatus(record, newStatus) {
+  if (!canEditAttendance.value) return
   if (record.status === newStatus) return
   const oldStatus = record.status
   record.status = newStatus
@@ -379,6 +413,11 @@ function exportAttendancePdf() {
 
 onMounted(() => {
   loadData()
+  window.addEventListener('sms-auth-changed', loadData)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('sms-auth-changed', loadData)
 })
 </script>
 
@@ -387,10 +426,15 @@ onMounted(() => {
     <!-- Header -->
     <header class="management-heading">
       <div>
-        <p class="eyebrow">ACADEMIC RECORDS & TRACKING</p>
-        <h1>Daily Student Attendance</h1>
+        <p class="eyebrow">{{ isStudentRole ? 'PERSONAL ATTENDANCE LOG' : 'ACADEMIC RECORDS & TRACKING' }}</p>
+        <h1>{{ isStudentRole ? `My Attendance Record — ${currentUser.name}` : 'Daily Student Attendance' }}</h1>
         <p class="page-description">
-          Real-time student check-in, daily roll call, automated absence tracking, and attendance rates.
+          <template v-if="isStudentRole">
+            Private daily attendance status strictly for <strong>{{ currentUser.name }}</strong>.
+          </template>
+          <template v-else>
+            Real-time student check-in, daily roll call, automated absence tracking, and attendance rates.
+          </template>
         </p>
       </div>
 
@@ -467,6 +511,7 @@ onMounted(() => {
         </button>
 
         <button
+          v-if="canEditAttendance"
           type="button"
           class="secondary-button"
           :disabled="saving || !filteredAttendances.length"
@@ -479,7 +524,7 @@ onMounted(() => {
           Mark All Present
         </button>
 
-        <button class="primary-button" type="button" @click="openAddModal">
+        <button v-if="canEditAttendance" class="primary-button" type="button" @click="openAddModal">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"/>
             <line x1="5" y1="12" x2="19" y2="12"/>
@@ -547,7 +592,7 @@ onMounted(() => {
       <div class="records-toolbar">
         <div class="toolbar-left-group">
           <!-- Class Filter Selector -->
-          <div class="filter-select-wrapper">
+          <div v-if="!isStudentRole" class="filter-select-wrapper">
             <label for="class-filter" class="visually-hidden">Filter Class</label>
             <select id="class-filter" v-model="activeClassFilter" class="filter-select">
               <option value="all">All Class Sections ({{ availableClasses.length }})</option>
@@ -602,7 +647,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="search-box">
+        <div v-if="!isStudentRole" class="search-box">
           <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="11" cy="11" r="8"/>
             <line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -663,7 +708,7 @@ onMounted(() => {
               <th>CHECK-IN TIME</th>
               <th>ATTENDANCE STATUS</th>
               <th>NOTES & REMARKS</th>
-              <th class="actions-heading">ACTIONS</th>
+              <th v-if="canEditAttendance" class="actions-heading">ACTIONS</th>
             </tr>
           </thead>
           <tbody>
@@ -690,9 +735,9 @@ onMounted(() => {
                 </span>
               </td>
 
-              <!-- Quick 1-Click Status Toggles -->
+              <!-- Quick 1-Click Status Toggles (Admin/Teacher) or Read-Only Pill (Student) -->
               <td>
-                <div class="interactive-status-group" role="group" aria-label="Toggle student attendance status">
+                <div v-if="canEditAttendance" class="interactive-status-group" role="group" aria-label="Toggle student attendance status">
                   <button
                     type="button"
                     class="status-toggle-btn"
@@ -744,6 +789,17 @@ onMounted(() => {
                     Excused
                   </button>
                 </div>
+                <span
+                  v-else
+                  class="status-pill"
+                  :class="{
+                    'status-active': record.status === 'Present',
+                    'status-warning': record.status === 'Late',
+                    'status-danger': record.status === 'Absent',
+                  }"
+                >
+                  {{ record.status }}
+                </span>
               </td>
 
               <td>
@@ -753,7 +809,7 @@ onMounted(() => {
                 <span v-else class="muted-value">No remark</span>
               </td>
 
-              <td class="row-actions">
+              <td v-if="canEditAttendance" class="row-actions">
                 <button class="action-button" type="button" @click="openEditModal(record)">
                   Edit
                 </button>

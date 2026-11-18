@@ -1,22 +1,61 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { createTeacher, deleteTeacher, getTeachers, updateTeacher } from '../../services/teacherService.js'
+import {
+  findLinkedUser,
+  removeLinkedUser,
+  syncUsersWithDirectories,
+  upsertLinkedUser,
+} from '../../services/authService.js'
 
 const teachers = ref([])
 const search = ref('')
+const genderFilter = ref('all') // 'all' | 'Male' | 'Female'
 const loading = ref(false)
 const saving = ref(false)
 const pageError = ref('')
 const formError = ref('')
 const modalOpen = ref(false)
 const editingId = ref(null)
-const form = reactive({ employee_number: '', name: '', email: '', phone: '', specialization: '' })
+const editingPreviousEmail = ref('')
+const form = reactive({ employee_number: '', name: '', email: '', gender: 'Male', password: 'teacher123', phone: '', specialization: '' })
+
+const TEACHER_GENDER_KEY = 'sms_teacher_genders'
+
+function getSavedTeacherGenders() {
+  try {
+    return JSON.parse(localStorage.getItem(TEACHER_GENDER_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function saveTeacherGenderLocal(emailOrId, gender) {
+  if (!emailOrId || !gender) return
+  const map = getSavedTeacherGenders()
+  map[String(emailOrId).toLowerCase()] = gender
+  localStorage.setItem(TEACHER_GENDER_KEY, JSON.stringify(map))
+}
+
+function resolveTeacherGender(teacher) {
+  if (teacher.gender === 'Male' || teacher.gender === 'Female') return teacher.gender
+  const map = getSavedTeacherGenders()
+  return map[String(teacher.id)] || map[(teacher.email || '').toLowerCase()] || ''
+}
+
+const maleTeacherCount = computed(() => teachers.value.filter((t) => resolveTeacherGender(t) === 'Male').length)
+const femaleTeacherCount = computed(() => teachers.value.filter((t) => resolveTeacherGender(t) === 'Female').length)
 
 const filteredTeachers = computed(() => {
+  let list = teachers.value
+  if (genderFilter.value !== 'all') {
+    list = list.filter((t) => resolveTeacherGender(t) === genderFilter.value)
+  }
+
   const query = search.value.trim().toLowerCase()
-  if (!query) return teachers.value
-  return teachers.value.filter((teacher) =>
-    [teacher.employee_number, teacher.name, teacher.email, teacher.phone, teacher.specialization]
+  if (!query) return list
+  return list.filter((teacher) =>
+    [teacher.employee_number, teacher.name, teacher.email, teacher.phone, teacher.specialization, resolveTeacherGender(teacher)]
       .some((value) => value?.toLowerCase().includes(query)),
   )
 })
@@ -39,6 +78,8 @@ async function loadTeachers() {
   try {
     const response = await getTeachers()
     teachers.value = response.data
+    // Automatically synchronize all Teachers with Users & Roles login accounts
+    syncUsersWithDirectories({ teachers: teachers.value })
   } catch (error) {
     pageError.value = messageFor(error)
   } finally {
@@ -48,17 +89,22 @@ async function loadTeachers() {
 
 function openCreateForm() {
   editingId.value = null
-  Object.assign(form, { employee_number: '', name: '', email: '', phone: '', specialization: '' })
+  editingPreviousEmail.value = ''
+  Object.assign(form, { employee_number: '', name: '', email: '', gender: 'Male', password: 'teacher123', phone: '', specialization: '' })
   formError.value = ''
   modalOpen.value = true
 }
 
 function openEditForm(teacher) {
   editingId.value = teacher.id
+  editingPreviousEmail.value = teacher.email || ''
+  const linked = findLinkedUser({ role: 'teacher', linkedId: teacher.id, email: teacher.email })
   Object.assign(form, {
     employee_number: teacher.employee_number || '',
     name: teacher.name,
     email: teacher.email || '',
+    gender: resolveTeacherGender(teacher) || 'Male',
+    password: linked?.password || 'teacher123',
     phone: teacher.phone || '',
     specialization: teacher.specialization || '',
   })
@@ -70,17 +116,39 @@ async function saveTeacher() {
   saving.value = true
   formError.value = ''
 
+  const cleanEmail = form.email.trim() || `${form.name.trim().toLowerCase().replace(/\s+/g, '.')}@school.edu`
   const payload = {
     name: form.name.trim(),
-    email: form.email.trim() || null,
+    email: cleanEmail,
+    gender: form.gender || 'Male',
     phone: form.phone.trim() || null,
     employee_number: form.employee_number.trim() || null,
     specialization: form.specialization.trim() || null,
   }
 
   try {
-    if (editingId.value) await updateTeacher(editingId.value, payload)
-    else await createTeacher(payload)
+    let savedId = editingId.value
+    if (editingId.value) {
+      await updateTeacher(editingId.value, payload)
+    } else {
+      const res = await createTeacher(payload)
+      savedId = res.data?.data?.id ?? res.data?.id ?? null
+    }
+
+    saveTeacherGenderLocal(cleanEmail, payload.gender)
+    if (savedId) saveTeacherGenderLocal(savedId, payload.gender)
+
+    // Sync Teacher portal credentials into Users & Roles
+    upsertLinkedUser({
+      role: 'teacher',
+      linkedId: savedId,
+      name: payload.name,
+      email: cleanEmail,
+      password: form.password.trim() || 'teacher123',
+      department: payload.specialization || 'General Faculty',
+      previousEmail: editingPreviousEmail.value,
+    })
+
     modalOpen.value = false
     await loadTeachers()
   } catch (error) {
@@ -91,11 +159,12 @@ async function saveTeacher() {
 }
 
 async function removeTeacher(teacher) {
-  if (!window.confirm(`Delete ${teacher.name}? This cannot be undone.`)) return
+  if (!window.confirm(`Delete ${teacher.name}? This will also remove their portal login account.`)) return
   pageError.value = ''
   try {
     await deleteTeacher(teacher.id)
     teachers.value = teachers.value.filter((item) => item.id !== teacher.id)
+    removeLinkedUser({ role: 'teacher', linkedId: teacher.id, email: teacher.email })
   } catch (error) {
     pageError.value = messageFor(error)
   }
@@ -124,7 +193,7 @@ onMounted(loadTeachers)
     <!-- Summary KPI Cards -->
     <div class="teachers-kpi-grid">
       <article class="summary-card">
-        <div class="summary-icon tone-blue">
+        <div class="summary-icon tone-primary">
           <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
@@ -134,34 +203,37 @@ onMounted(loadTeachers)
           <span class="summary-label">Total Faculty Staff</span>
           <strong>{{ teachers.length }}</strong>
         </div>
-        <span class="summary-caption">Active directory</span>
+        <span class="summary-caption">{{ departmentsCount }} Faculties</span>
       </article>
 
       <article class="summary-card">
-        <div class="summary-icon tone-amber">
+        <div class="summary-icon tone-blue">
           <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            <circle cx="10" cy="14" r="5"/>
+            <path d="M19 5l-5.4 5.4"/>
+            <path d="M15 5h4v4"/>
           </svg>
         </div>
         <div class="summary-details">
-          <span class="summary-label">Academic Faculties</span>
-          <strong>{{ departmentsCount }}</strong>
+          <span class="summary-label">Male Faculty</span>
+          <strong>{{ maleTeacherCount }}</strong>
         </div>
-        <span class="summary-caption">Specializations</span>
+        <span class="summary-caption">Active male staff</span>
       </article>
 
       <article class="summary-card">
-        <div class="summary-icon tone-green">
+        <div class="summary-icon tone-purple">
           <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-            <polyline points="22 4 12 14.01 9 11.01"/>
+            <circle cx="12" cy="9" r="5"/>
+            <path d="M12 14v7"/>
+            <path d="M9 18h6"/>
           </svg>
         </div>
         <div class="summary-details">
-          <span class="summary-label">Instructional Status</span>
-          <strong>100% Active</strong>
+          <span class="summary-label">Female Faculty</span>
+          <strong>{{ femaleTeacherCount }}</strong>
         </div>
-        <span class="summary-caption">Staff verified</span>
+        <span class="summary-caption">Active female staff</span>
       </article>
     </div>
 
@@ -169,14 +241,27 @@ onMounted(loadTeachers)
       <div class="records-toolbar">
         <div>
           <h2>Teacher Directory</h2>
-          <p>Search and manage educator profiles</p>
+          <p>Search, filter by gender, and manage educator profiles</p>
         </div>
-        <div class="search-box">
-          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"/>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-          <input v-model="search" type="search" placeholder="Search by name, email, subject..." aria-label="Search teachers" />
+        <div class="toolbar-controls" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <div class="gender-filter-group" role="group" aria-label="Filter teachers by gender">
+            <button type="button" class="gender-filter-pill" :class="{ active: genderFilter === 'all' }" @click="genderFilter = 'all'">
+              All ({{ teachers.length }})
+            </button>
+            <button type="button" class="gender-filter-pill" :class="{ active: genderFilter === 'Male' }" @click="genderFilter = 'Male'">
+              Male ({{ maleTeacherCount }})
+            </button>
+            <button type="button" class="gender-filter-pill" :class="{ active: genderFilter === 'Female' }" @click="genderFilter = 'Female'">
+              Female ({{ femaleTeacherCount }})
+            </button>
+          </div>
+          <div class="search-box">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input v-model="search" type="search" placeholder="Search by name, email, subject..." aria-label="Search teachers" />
+          </div>
         </div>
       </div>
 
@@ -211,6 +296,7 @@ onMounted(loadTeachers)
           <thead>
             <tr>
               <th>TEACHER</th>
+              <th>GENDER</th>
               <th>EMAIL</th>
               <th>PHONE</th>
               <th>SUBJECT AREA</th>
@@ -227,6 +313,31 @@ onMounted(loadTeachers)
                     <small>{{ teacher.employee_number || `Staff #${teacher.id}` }}</small>
                   </div>
                 </div>
+              </td>
+              <td>
+                <span
+                  v-if="resolveTeacherGender(teacher) === 'Male'"
+                  class="gender-badge gender-male"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="10" cy="14" r="5"/>
+                    <path d="M19 5l-5.4 5.4"/>
+                    <path d="M15 5h4v4"/>
+                  </svg>
+                  Male
+                </span>
+                <span
+                  v-else-if="resolveTeacherGender(teacher) === 'Female'"
+                  class="gender-badge gender-female"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="9" r="5"/>
+                    <path d="M12 14v7"/>
+                    <path d="M9 18h6"/>
+                  </svg>
+                  Female
+                </span>
+                <span v-else class="gender-badge gender-unset">Unassigned</span>
               </td>
               <td>{{ teacher.email || '—' }}</td>
               <td>{{ teacher.phone || '—' }}</td>
@@ -253,24 +364,67 @@ onMounted(loadTeachers)
       <section class="teacher-modal" role="dialog" aria-modal="true" aria-labelledby="teacher-modal-title">
         <div class="modal-heading">
           <div>
-            <p class="eyebrow">FACULTY DIRECTORY</p>
+            <p class="eyebrow">FACULTY DIRECTORY & PORTAL LOGIN</p>
             <h2 id="teacher-modal-title">{{ editingId ? 'Edit Teacher Details' : 'Add New Faculty' }}</h2>
           </div>
           <button class="close-button" type="button" aria-label="Close" @click="modalOpen = false">✕</button>
         </div>
 
-        <p class="modal-description">Enter teacher details and subject specialization.</p>
+        <p class="modal-description">Enter teacher details and portal login password (automatically synced with Users & Roles).</p>
 
         <form class="teacher-fields" @submit.prevent="saveTeacher">
-          <label>
-            Full Name
-            <input v-model="form.name" required maxlength="255" placeholder="e.g. Dr. Jamie Lee" />
-          </label>
+          <div class="field-row">
+            <label>
+              Full Name
+              <input v-model="form.name" required maxlength="255" placeholder="e.g. Dr. Jamie Lee" />
+            </label>
 
-          <label>
-            Email Address <span class="optional-label">(Optional)</span>
-            <input v-model="form.email" type="email" maxlength="255" placeholder="jamie@school.edu" />
-          </label>
+            <!-- Professional Male / Female Gender Picker -->
+            <div class="gender-field-wrap">
+              <span class="gender-field-label">Gender</span>
+              <div class="gender-picker-grid" role="group" aria-label="Select teacher gender">
+                <button
+                  type="button"
+                  class="gender-option-btn"
+                  :class="{ 'active-male': form.gender === 'Male' }"
+                  @click="form.gender = 'Male'"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="10" cy="14" r="5"/>
+                    <path d="M19 5l-5.4 5.4"/>
+                    <path d="M15 5h4v4"/>
+                  </svg>
+                  <span>Male</span>
+                </button>
+
+                <button
+                  type="button"
+                  class="gender-option-btn"
+                  :class="{ 'active-female': form.gender === 'Female' }"
+                  @click="form.gender = 'Female'"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="9" r="5"/>
+                    <path d="M12 14v7"/>
+                    <path d="M9 18h6"/>
+                  </svg>
+                  <span>Female</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <label>
+              Email Address (Portal Login)
+              <input v-model="form.email" required type="email" maxlength="255" placeholder="jamie@school.edu" />
+            </label>
+
+            <label>
+              Portal Login Password
+              <input v-model="form.password" required maxlength="100" placeholder="e.g. teacher123" />
+            </label>
+          </div>
 
           <div class="field-row">
             <label>

@@ -1,11 +1,12 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import {
   calculateCompositeScore,
   calculateStudentGpa,
   getClassComparison,
   getAcademicReports,
   getLetterGrade,
+  getStudentReportForUser,
   getSubjectBreakdown,
   updateStudentGrade,
 } from '../../services/academicReportService.js'
@@ -15,6 +16,22 @@ import {
   exportToPdf,
   printStudentReportCard,
 } from '../../utils/exportUtils.js'
+import { getCurrentUser } from '../../services/authService.js'
+import { hasPermission } from '../../services/permissionService.js'
+
+const currentUser = ref(getCurrentUser())
+const isStudentRole = computed(() => currentUser.value?.role === 'student')
+const canEditGrades = computed(() => {
+  if (currentUser.value?.role === 'admin') return true
+  if (currentUser.value?.role === 'teacher') return hasPermission('teacher', 'manage_scores')
+  return false
+})
+const canDownloadTranscript = computed(() => {
+  if (currentUser.value?.role === 'admin') return true
+  if (currentUser.value?.role === 'teacher') return hasPermission('teacher', 'export_reports')
+  if (currentUser.value?.role === 'student') return hasPermission('student', 'download_report_card')
+  return false
+})
 
 // Active view tabs
 const activeTab = ref('rankings') // 'rankings' | 'subjects' | 'classes' | 'calculator'
@@ -123,13 +140,29 @@ const classOptions = computed(() => {
   return Array.from(set).sort()
 })
 
+// Personal student record when logged in as a student
+const myStudentRecord = computed(() =>
+  isStudentRole.value && students.value.length ? students.value[0] : null,
+)
+
 // Load data
 function loadReportData() {
   loading.value = true
   try {
-    students.value = getAcademicReports()
-    subjects.value = getSubjectBreakdown()
-    classSummaries.value = getClassComparison()
+    currentUser.value = getCurrentUser()
+    if (currentUser.value?.role === 'student') {
+      // Strictly isolate to ONLY the logged-in student's own record by name/email
+      students.value = getStudentReportForUser(currentUser.value)
+      subjects.value = []
+      classSummaries.value = []
+      if (activeTab.value === 'subjects' || activeTab.value === 'classes') {
+        activeTab.value = 'rankings'
+      }
+    } else {
+      students.value = getAcademicReports()
+      subjects.value = getSubjectBreakdown()
+      classSummaries.value = getClassComparison()
+    }
   } finally {
     loading.value = false
   }
@@ -303,6 +336,11 @@ function handleExportCsv() {
 
 onMounted(() => {
   loadReportData()
+  window.addEventListener('sms-auth-changed', loadReportData)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('sms-auth-changed', loadReportData)
 })
 </script>
 
@@ -311,60 +349,83 @@ onMounted(() => {
     <!-- Header -->
     <header class="management-heading">
       <div>
-        <p class="eyebrow">ACADEMIC PERFORMANCE & EVALUATION</p>
-        <h1>Academic Reports & Grade Calculation</h1>
+        <p class="eyebrow">{{ isStudentRole ? 'PERSONAL ACADEMIC TRANSCRIPT' : 'ACADEMIC PERFORMANCE & EVALUATION' }}</p>
+        <h1>{{ isStudentRole ? `My Grades & Transcript — ${currentUser.name}` : 'Academic Reports & Grade Calculation' }}</h1>
         <p class="page-description">
-          Institutional GPA distribution, standard grade calculation engine, section comparisons, and official student report cards.
+          <template v-if="isStudentRole">
+            Private academic record strictly for <strong>{{ currentUser.name }}</strong> ({{ myStudentRecord?.class_name || currentUser.department }}).
+          </template>
+          <template v-else>
+            Institutional GPA distribution, standard grade calculation engine, section comparisons, and official student report cards.
+          </template>
         </p>
       </div>
 
       <div class="header-action-group">
-        <!-- Export to CSV -->
-        <button
-          type="button"
-          class="secondary-button"
-          title="Export CSV data"
-          @click="handleExportCsv"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="16" y1="13" x2="8" y2="13"/>
-            <line x1="16" y1="17" x2="8" y2="17"/>
-            <polyline points="10 9 9 9 8 9"/>
-          </svg>
-          <span>CSV</span>
-        </button>
+        <template v-if="isStudentRole">
+          <button
+            v-if="canDownloadTranscript && myStudentRecord"
+            type="button"
+            class="primary-button"
+            @click="openReportCard(myStudentRecord)"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 6 2 18 2 18 9"/>
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+              <rect x="6" y="14" width="12" height="8"/>
+            </svg>
+            <span>View / Print My Transcript</span>
+          </button>
+        </template>
 
-        <!-- Export to Excel (.xls) -->
-        <button
-          type="button"
-          class="secondary-button"
-          title="Export Microsoft Excel Spreadsheet (.xls)"
-          @click="handleExportExcel"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="7 10 12 15 17 10"/>
-            <line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          <span>Export Excel (.xls)</span>
-        </button>
+        <template v-else>
+          <!-- Export to CSV -->
+          <button
+            type="button"
+            class="secondary-button"
+            title="Export CSV data"
+            @click="handleExportCsv"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+            <span>CSV</span>
+          </button>
 
-        <!-- Export to PDF -->
-        <button
-          type="button"
-          class="primary-button"
-          title="Generate Printable PDF Report"
-          @click="handleExportPdf"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 6 2 18 2 18 9"/>
-            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
-            <rect x="6" y="14" width="12" height="8"/>
-          </svg>
-          <span>Export PDF Report</span>
-        </button>
+          <!-- Export to Excel (.xls) -->
+          <button
+            type="button"
+            class="secondary-button"
+            title="Export Microsoft Excel Spreadsheet (.xls)"
+            @click="handleExportExcel"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span>Export Excel (.xls)</span>
+          </button>
+
+          <!-- Export to PDF -->
+          <button
+            type="button"
+            class="primary-button"
+            title="Generate Printable PDF Report"
+            @click="handleExportPdf"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 6 2 18 2 18 9"/>
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+              <rect x="6" y="14" width="12" height="8"/>
+            </svg>
+            <span>Export PDF Report</span>
+          </button>
+        </template>
       </div>
     </header>
 
@@ -377,62 +438,120 @@ onMounted(() => {
       <span>{{ notificationMsg }}</span>
     </div>
 
-    <!-- 4 KPI Summary Cards -->
-    <div class="summary-kpi-grid">
-      <article class="summary-card">
-        <div class="summary-icon tone-primary">
-          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 10v6M2 10l10-5 10 5-10 5z"/>
-            <path d="M6 12v5c3 3 9 3 12 0v-5"/>
-          </svg>
+    <!-- Personal Student KPI Summary Cards (Strictly for Logged-In Student) -->
+    <div v-if="isStudentRole && myStudentRecord" class="reports-kpi-grid is-student-kpi">
+      <article class="report-kpi-card accent-indigo">
+        <div class="kpi-top-row">
+          <div class="summary-icon tone-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 10v6M2 10l10-5 10 5-10 5z"/>
+              <path d="M6 12v5c3 3 9 3 12 0v-5"/>
+            </svg>
+          </div>
+          <span class="kpi-meta-pill">Weighted: {{ myStudentRecord.weightedGpa }}</span>
         </div>
-        <div class="summary-details">
-          <span class="summary-label">Mean Institutional GPA</span>
-          <strong>{{ institutionalMeanGpa }} <small class="gpa-max">/ 4.00</small></strong>
+        <div class="kpi-body">
+          <span class="kpi-title">My GPA (4.0 Scale)</span>
+          <strong class="kpi-number">{{ myStudentRecord.unweightedGpa }} <small class="gpa-max">/ 4.00</small></strong>
         </div>
-        <span class="summary-caption">Weighted AP: {{ institutionalWeightedGpa }}</span>
       </article>
 
-      <article class="summary-card">
-        <div class="summary-icon tone-green">
-          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>
+      <article class="report-kpi-card accent-emerald">
+        <div class="kpi-top-row">
+          <div class="summary-icon tone-green">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <span class="kpi-meta-pill">{{ myStudentRecord.class_name }}</span>
         </div>
-        <div class="summary-details">
-          <span class="summary-label">Curriculum Pass Rate</span>
-          <strong>{{ overallPassRate }}</strong>
+        <div class="kpi-body">
+          <span class="kpi-title">My Attendance</span>
+          <strong class="kpi-number">{{ myStudentRecord.attendance_rate }}</strong>
         </div>
-        <span class="summary-caption">Threshold ≥ 60%</span>
       </article>
 
-      <article class="summary-card">
-        <div class="summary-icon tone-amber">
-          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="8" r="7"/>
-            <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>
-          </svg>
+      <article class="report-kpi-card accent-amber">
+        <div class="kpi-top-row">
+          <div class="summary-icon tone-amber">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="8" r="7"/>
+              <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>
+            </svg>
+          </div>
+          <span class="kpi-meta-pill">{{ myStudentRecord.courses.length }} Courses</span>
         </div>
-        <div class="summary-details">
-          <span class="summary-label">Honor Roll Scholars</span>
-          <strong>{{ honorRollCount }} Students</strong>
+        <div class="kpi-body">
+          <span class="kpi-title">Enrolled Credits</span>
+          <strong class="kpi-number">{{ myStudentRecord.totalCredits }} Credits</strong>
         </div>
-        <span class="summary-caption">Cum Laude & Dean's List</span>
+      </article>
+    </div>
+
+    <!-- Admin / Teacher 4-Column Executive KPI Summary Cards -->
+    <div v-else class="reports-kpi-grid">
+      <article class="report-kpi-card accent-indigo">
+        <div class="kpi-top-row">
+          <div class="summary-icon tone-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 10v6M2 10l10-5 10 5-10 5z"/>
+              <path d="M6 12v5c3 3 9 3 12 0v-5"/>
+            </svg>
+          </div>
+          <span class="kpi-meta-pill pill-indigo">Weighted AP: {{ institutionalWeightedGpa }}</span>
+        </div>
+        <div class="kpi-body">
+          <span class="kpi-title">Mean Institutional GPA</span>
+          <strong class="kpi-number">{{ institutionalMeanGpa }} <small class="gpa-max">/ 4.00</small></strong>
+        </div>
       </article>
 
-      <article class="summary-card">
-        <div class="summary-icon tone-blue">
-          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-            <line x1="8" y1="21" x2="16" y2="21"/>
-            <line x1="12" y1="17" x2="12" y2="21"/>
-          </svg>
+      <article class="report-kpi-card accent-emerald">
+        <div class="kpi-top-row">
+          <div class="summary-icon tone-green">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <span class="kpi-meta-pill pill-emerald">Threshold ≥ 60%</span>
         </div>
-        <div class="summary-details">
-          <span class="summary-label">Active Curriculum</span>
-          <strong>{{ subjects.length }} Core Subjects</strong>
+        <div class="kpi-body">
+          <span class="kpi-title">Curriculum Pass Rate</span>
+          <strong class="kpi-number">{{ overallPassRate }}</strong>
         </div>
-        <span class="summary-caption">Standardized grading</span>
+      </article>
+
+      <article class="report-kpi-card accent-amber">
+        <div class="kpi-top-row">
+          <div class="summary-icon tone-amber">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="8" r="7"/>
+              <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>
+            </svg>
+          </div>
+          <span class="kpi-meta-pill pill-amber">Cum Laude & Dean's</span>
+        </div>
+        <div class="kpi-body">
+          <span class="kpi-title">Honor Roll Scholars</span>
+          <strong class="kpi-number">{{ honorRollCount }} Students</strong>
+        </div>
+      </article>
+
+      <article class="report-kpi-card accent-blue">
+        <div class="kpi-top-row">
+          <div class="summary-icon tone-blue">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          </div>
+          <span class="kpi-meta-pill pill-blue">Standardized Grading</span>
+        </div>
+        <div class="kpi-body">
+          <span class="kpi-title">Active Curriculum</span>
+          <strong class="kpi-number">{{ subjects.length }} Core Subjects</strong>
+        </div>
       </article>
     </div>
 
@@ -447,13 +566,12 @@ onMounted(() => {
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
           <circle cx="8.5" cy="7" r="4"/>
-          <line x1="18" y1="8" x2="23" y2="13"/>
-          <line x1="23" y1="8" x2="18" y2="13"/>
         </svg>
-        <span>Student GPA Rankings ({{ filteredStudents.length }})</span>
+        <span>{{ isStudentRole ? `My Academic Record (${currentUser.name})` : `Student GPA Rankings (${filteredStudents.length})` }}</span>
       </button>
 
       <button
+        v-if="!isStudentRole"
         type="button"
         class="report-nav-tab"
         :class="{ active: activeTab === 'subjects' }"
@@ -468,6 +586,7 @@ onMounted(() => {
       </button>
 
       <button
+        v-if="!isStudentRole"
         type="button"
         class="report-nav-tab"
         :class="{ active: activeTab === 'classes' }"
@@ -506,8 +625,8 @@ onMounted(() => {
     <!-- TAB 1: STUDENT GPA RANKINGS & REPORT CARDS                   -->
     <!-- ============================================================ -->
     <div v-if="activeTab === 'rankings'" class="reports-tab-content">
-      <!-- Toolbar Filter -->
-      <div class="reports-toolbar">
+      <!-- Toolbar Filter (Admin & Teacher only — Students strictly see only themselves) -->
+      <div v-if="!isStudentRole" class="reports-toolbar">
         <div class="search-box">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="11" cy="11" r="8"/>
@@ -644,6 +763,54 @@ onMounted(() => {
                     <p class="empty-text">Try adjusting your search query or class filter.</p>
                   </div>
                 </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Detailed Course Breakdown strictly for the Logged-In Student -->
+      <div v-if="isStudentRole && myStudentRecord" class="management-card table-card" style="margin-top: 20px;">
+        <div class="records-toolbar">
+          <div>
+            <h2>{{ myStudentRecord.name }} — Enrolled Courses & Marks</h2>
+            <p>Individual subject scores, credits, letter grades, and instructor remarks</p>
+          </div>
+          <button
+            v-if="canDownloadTranscript"
+            type="button"
+            class="secondary-button"
+            @click="openReportCard(myStudentRecord)"
+          >
+            Print Official Transcript (PDF)
+          </button>
+        </div>
+        <div class="table-scroll">
+          <table class="records-table">
+            <thead>
+              <tr>
+                <th>Course Code</th>
+                <th>Subject</th>
+                <th>Credits</th>
+                <th>Score</th>
+                <th>Letter Grade</th>
+                <th>Grade Points</th>
+                <th>Faculty Remark</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="course in myStudentRecord.courses" :key="course.code">
+                <td><code>{{ course.code }}</code></td>
+                <td>
+                  <strong>{{ course.subject }}</strong>
+                  <span v-if="course.isAp" class="mini-tag tag-ap">AP</span>
+                  <span v-if="course.isHonors" class="mini-tag tag-honors">Honors</span>
+                </td>
+                <td>{{ course.credits }} Credits</td>
+                <td><strong>{{ course.score }}%</strong></td>
+                <td><span class="letter-grade-pill">{{ course.grade }}</span></td>
+                <td>{{ course.points }}</td>
+                <td><span class="course-remark">{{ course.remark || 'Satisfactory progress' }}</span></td>
               </tr>
             </tbody>
           </table>
@@ -937,7 +1104,7 @@ onMounted(() => {
                   <th>Letter</th>
                   <th>Points</th>
                   <th>Faculty Assessment Remark</th>
-                  <th style="width: 70px;">Action</th>
+                  <th v-if="canEditGrades" style="width: 70px;">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -950,7 +1117,7 @@ onMounted(() => {
                   </td>
                   <td>{{ course.credits }}</td>
                   <td>
-                    <div v-if="editingCourseCode === course.code" class="edit-score-inline">
+                    <div v-if="canEditGrades && editingCourseCode === course.code" class="edit-score-inline">
                       <input
                         v-model.number="editingScoreVal"
                         type="number"
@@ -969,7 +1136,7 @@ onMounted(() => {
                   <td>
                     <span class="course-remark">{{ course.remark || 'Satisfactory progress' }}</span>
                   </td>
-                  <td>
+                  <td v-if="canEditGrades">
                     <button
                       v-if="editingCourseCode !== course.code"
                       type="button"
@@ -990,7 +1157,7 @@ onMounted(() => {
           <button type="button" class="secondary-button" @click="reportCardModalOpen = false">
             Close
           </button>
-          <button type="button" class="primary-button" @click="printTranscript">
+          <button v-if="canDownloadTranscript" type="button" class="primary-button" @click="printTranscript">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="6 9 6 2 18 2 18 9"/>
               <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
@@ -1005,23 +1172,141 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* Tabs Navigation */
+/* 4-Column Executive KPI Grid (Zero Truncation, Balanced Row) */
+.reports-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.reports-kpi-grid.is-student-kpi {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 1180px) {
+  .reports-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .reports-kpi-grid,
+  .reports-kpi-grid.is-student-kpi {
+    grid-template-columns: 1fr;
+  }
+}
+
+.report-kpi-card {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.03);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+  overflow: hidden;
+}
+
+.report-kpi-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: #e2e8f0;
+}
+
+.report-kpi-card.accent-indigo::before { background: linear-gradient(90deg, #4f46e5, #818cf8); }
+.report-kpi-card.accent-emerald::before { background: linear-gradient(90deg, #10b981, #34d399); }
+.report-kpi-card.accent-amber::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.report-kpi-card.accent-blue::before { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+
+.report-kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px -8px rgba(15, 23, 42, 0.08);
+  border-color: #cbd5e1;
+}
+
+.kpi-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.kpi-top-row .summary-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  flex-shrink: 0;
+}
+
+.kpi-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.kpi-meta-pill.pill-indigo { background: #eef2ff; color: #4338ca; border-color: #e0e7ff; }
+.kpi-meta-pill.pill-emerald { background: #ecfdf5; color: #047857; border-color: #d1fae5; }
+.kpi-meta-pill.pill-amber { background: #fffbeb; color: #b45309; border-color: #fef3c7; }
+.kpi-meta-pill.pill-blue { background: #eff6ff; color: #1d4ed8; border-color: #dbeafe; }
+
+.kpi-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kpi-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.45px;
+  color: #64748b;
+}
+
+.kpi-number {
+  font-size: 24px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* Modern Pill-Bar Tabs Navigation */
 .reports-tabs-bar {
   display: flex;
-  gap: 8px;
-  border-bottom: 2px solid #e2e8f0;
-  margin-bottom: 24px;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 6px;
+  margin-bottom: 18px;
   overflow-x: auto;
-  padding-bottom: 2px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
 }
 
 .report-nav-tab {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 18px;
-  border-radius: 8px 8px 0 0;
-  font-size: 13.5px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  font-size: 13px;
   font-weight: 600;
   color: #64748b;
   background: transparent;
@@ -1038,32 +1323,46 @@ onMounted(() => {
 
 .report-nav-tab.active {
   color: #4f46e5;
-  background: #ffffff;
-  border-bottom: 2px solid #4f46e5;
-  margin-bottom: -4px;
+  background: #eef2ff;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px #c7d2fe;
 }
 
-/* Toolbar */
+/* Clean White Filter Toolbar Card */
 .reports-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 18px;
+  padding: 14px 18px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
 }
 
 .search-box {
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
+  gap: 9px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   padding: 0 14px;
   height: 40px;
   flex: 1;
+  min-width: 240px;
   max-width: 380px;
+  color: #94a3b8;
+  transition: all 0.15s ease;
+}
+
+.search-box:focus-within {
+  background: #ffffff;
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
 }
 
 .search-box input {
@@ -1071,6 +1370,7 @@ onMounted(() => {
   outline: none;
   background: transparent;
   font-size: 13.5px;
+  color: #0f172a;
   width: 100%;
 }
 
@@ -1084,28 +1384,44 @@ onMounted(() => {
 .filter-select {
   height: 40px;
   padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
   background: #ffffff;
   font-size: 13px;
-  font-weight: 500;
-  color: #1e293b;
+  font-weight: 600;
+  color: #334155;
   outline: none;
+  cursor: pointer;
+}
+
+.filter-select:focus {
+  border-color: #4f46e5;
 }
 
 .toggle-weighted-label {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
-  color: #475569;
+  color: #334155;
   cursor: pointer;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
   padding: 0 14px;
   height: 40px;
-  border-radius: 8px;
+  border-radius: 10px;
+  transition: all 0.15s ease;
+}
+
+.toggle-weighted-label:hover {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.toggle-weighted-label input {
+  accent-color: #4f46e5;
 }
 
 /* Rank Badges */

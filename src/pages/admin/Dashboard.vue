@@ -1,43 +1,247 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import DataTable from '../../components/admin/DataTable.vue'
 import StatCard from '../../components/admin/StatCard.vue'
+import { getCurrentUser } from '../../services/authService.js'
+import { getStudentReportForUser } from '../../services/academicReportService.js'
+import { getAttendances, getTodayString } from '../../services/attendanceService.js'
+import { getClasses } from '../../services/classService.js'
+import { getRolePermissions } from '../../services/permissionService.js'
+import { getStudents } from '../../services/studentService.js'
+import { getTeachers } from '../../services/teacherService.js'
+import { printStudentReportCard } from '../../utils/exportUtils.js'
 
 const activePeriod = ref('this-week')
 const syncInProgress = ref(false)
 const syncSuccess = ref(false)
 
-const statistics = [
-  { label: 'Total Enrolled Students', value: '1,284', change: '+8.2% this term', icon: 'students', tone: 'primary' },
-  { label: 'Teaching Faculty', value: '64', change: '+3 new staff', icon: 'teachers', tone: 'blue' },
-  { label: 'Active Classes', value: '38', change: 'Across 6 grades', icon: 'classes', tone: 'amber' },
-  { label: 'Today’s Attendance', value: '94.6%', change: '+2.4% vs last week', icon: 'attendance', tone: 'green' },
-]
+const currentUser = ref(getCurrentUser())
+const permissions = ref(getRolePermissions())
+
+// Live backend records for Dashboard
+const liveStudents = ref([])
+const liveTeachers = ref([])
+const liveClasses = ref([])
+const liveAttendances = ref([])
+
+function resolveGenderFromLocal(key, record) {
+  if (record?.gender === 'Male' || record?.gender === 'Female') return record.gender
+  try {
+    const map = JSON.parse(localStorage.getItem(key) || '{}')
+    return map[String(record?.id)] || map[(record?.email || '').toLowerCase()] || ''
+  } catch {
+    return ''
+  }
+}
+
+async function loadDashboardLiveMetrics() {
+  const [stuRes, tchRes, clsRes, attRes] = await Promise.allSettled([
+    getStudents(),
+    getTeachers(),
+    getClasses(),
+    getAttendances({ date: getTodayString() }),
+  ])
+
+  if (stuRes.status === 'fulfilled' && Array.isArray(stuRes.value.data)) {
+    liveStudents.value = stuRes.value.data
+  }
+  if (tchRes.status === 'fulfilled' && Array.isArray(tchRes.value.data)) {
+    liveTeachers.value = tchRes.value.data
+  }
+  if (clsRes.status === 'fulfilled' && Array.isArray(clsRes.value.data)) {
+    liveClasses.value = clsRes.value.data
+  }
+  if (attRes.status === 'fulfilled' && Array.isArray(attRes.value.data)) {
+    liveAttendances.value = attRes.value.data
+  }
+}
+
+const myStudentProfile = computed(() => {
+  if (currentUser.value?.role !== 'student') return null
+  const list = getStudentReportForUser(currentUser.value)
+  return list.length ? list[0] : null
+})
+
+function updateAuth() {
+  currentUser.value = getCurrentUser()
+  permissions.value = getRolePermissions()
+}
+
+onMounted(() => {
+  loadDashboardLiveMetrics()
+  window.addEventListener('sms-auth-changed', updateAuth)
+  window.addEventListener('sms-permissions-updated', updateAuth)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('sms-auth-changed', updateAuth)
+  window.removeEventListener('sms-permissions-updated', updateAuth)
+})
+
+const studentCourses = computed(() => {
+  if (myStudentProfile.value?.courses?.length) {
+    return myStudentProfile.value.courses
+  }
+  return [
+    { code: 'MAT-101', subject: 'Mathematics (Advanced Algebra)', credits: 4, score: 96, grade: 'A+', remark: 'Outstanding mathematical reasoning' },
+    { code: 'ENG-201', subject: 'English Literature', credits: 3, score: 92, grade: 'A', remark: 'Insightful essays & analysis' },
+    { code: 'CHEM-301', subject: 'Chemistry (AP)', credits: 4, score: 94, grade: 'A', remark: 'Exemplary laboratory performance' },
+    { code: 'PHYS-202', subject: 'Physics (Honors)', credits: 4, score: 91, grade: 'A', remark: 'Solid conceptual comprehension' },
+    { code: 'CS-401', subject: 'Computer Science (AP)', credits: 4, score: 98, grade: 'A+', remark: 'Top algorithm marks' },
+    { code: 'HIST-102', subject: 'World History', credits: 3, score: 89, grade: 'B+', remark: 'Strong historical synthesis' },
+  ]
+})
+
+function printMyTranscript() {
+  const profile = myStudentProfile.value
+  printStudentReportCard({
+    student: {
+      name: profile?.name || currentUser.value?.name || 'Student',
+      email: profile?.email || currentUser.value?.email || 'student@school.edu',
+      class_name: profile?.class_name || currentUser.value?.department || 'Grade 10 - A',
+    },
+    grades: studentCourses.value,
+    gpa: profile?.unweightedGpa || '3.95',
+    rank: profile ? `#${profile.rank} (${profile.percentile})` : 'Honor Standing',
+    attendanceRate: profile?.attendance_rate || '96.0%',
+    term: 'Term 2 (Spring 2026–2027)',
+    principal: 'Dr. Alexander Vance',
+    conduct: 'Exemplary',
+  })
+}
+
+const liveMaleStudents = computed(
+  () => liveStudents.value.filter((s) => resolveGenderFromLocal('sms_student_genders', s) === 'Male').length,
+)
+const liveFemaleStudents = computed(
+  () => liveStudents.value.filter((s) => resolveGenderFromLocal('sms_student_genders', s) === 'Female').length,
+)
+const liveMaleTeachers = computed(
+  () => liveTeachers.value.filter((t) => resolveGenderFromLocal('sms_teacher_genders', t) === 'Male').length,
+)
+const liveFemaleTeachers = computed(
+  () => liveTeachers.value.filter((t) => resolveGenderFromLocal('sms_teacher_genders', t) === 'Female').length,
+)
+
+const todayAttendanceRate = computed(() => {
+  if (!liveAttendances.value.length) return '100%'
+  const presentOrLate = liveAttendances.value.filter(
+    (a) => a.status === 'Present' || a.status === 'Late',
+  ).length
+  return `${Math.round((presentOrLate / liveAttendances.value.length) * 100)}%`
+})
+
+const statistics = computed(() => {
+  const totalStu = liveStudents.value.length
+  const totalTch = liveTeachers.value.length
+  const totalCls = liveClasses.value.length
+
+  return [
+    {
+      label: 'Total Enrolled Students',
+      value: String(totalStu),
+      change: `${liveMaleStudents.value} Male · ${liveFemaleStudents.value} Female`,
+      icon: 'students',
+      tone: 'primary',
+    },
+    {
+      label: 'Teaching Faculty',
+      value: String(totalTch),
+      change: `${liveMaleTeachers.value} Male · ${liveFemaleTeachers.value} Female`,
+      icon: 'teachers',
+      tone: 'blue',
+    },
+    {
+      label: 'Active Classes',
+      value: String(totalCls),
+      change: totalCls ? `${totalCls} active sections` : 'Ready to configure',
+      icon: 'classes',
+      tone: 'amber',
+    },
+    {
+      label: 'Today’s Attendance',
+      value: todayAttendanceRate.value,
+      change: `${liveAttendances.value.length} daily check-ins`,
+      icon: 'attendance',
+      tone: 'green',
+    },
+  ]
+})
+
+const activeStatistics = computed(() => {
+  if (currentUser.value?.role === 'student') {
+    const profile = myStudentProfile.value
+    return [
+      { label: 'My Cumulative GPA', value: profile?.unweightedGpa || '3.90', change: profile?.standing || 'Honor Roll', icon: 'students', tone: 'primary' },
+      { label: 'My Term Attendance', value: profile?.attendance_rate || '96.0%', change: profile?.class_name || currentUser.value?.department || 'Grade 10 - A', icon: 'attendance', tone: 'green' },
+      { label: 'My Enrolled Courses', value: `${studentCourses.value.length} Subjects`, change: `${profile?.totalCredits || 18} Semester Credits`, icon: 'classes', tone: 'blue' },
+      { label: 'Next Assessment', value: 'Oct 30', change: 'Chemistry Lab Midterm', icon: 'teachers', tone: 'amber' },
+    ]
+  }
+  if (currentUser.value?.role === 'teacher') {
+    return [
+      { label: 'Enrolled Students', value: `${liveStudents.value.length} Students`, change: `${liveMaleStudents.value} Male · ${liveFemaleStudents.value} Female`, icon: 'students', tone: 'primary' },
+      { label: 'Today’s Attendance', value: todayAttendanceRate.value, change: `${liveAttendances.value.length} check-ins recorded`, icon: 'attendance', tone: 'green' },
+      { label: 'Active Classes', value: `${liveClasses.value.length} Sections`, change: 'Current academic term', icon: 'classes', tone: 'blue' },
+      { label: 'Teaching Faculty', value: `${liveTeachers.value.length} Staff`, change: `${liveMaleTeachers.value} Male · ${liveFemaleTeachers.value} Female`, icon: 'teachers', tone: 'amber' },
+    ]
+  }
+  return statistics.value
+})
 
 const attendanceByDay = [
-  { day: 'Mon', value: 88, present: '1,130' },
-  { day: 'Tue', value: 96, present: '1,232' },
-  { day: 'Wed', value: 91, present: '1,168' },
-  { day: 'Thu', value: 98, present: '1,258' },
-  { day: 'Fri', value: 94, present: '1,207' },
-  { day: 'Sat', value: 42, present: '539', isWeekend: true },
-  { day: 'Sun', value: 18, present: '231', isWeekend: true },
+  { day: 'Mon', value: 88, present: '88%' },
+  { day: 'Tue', value: 96, present: '96%' },
+  { day: 'Wed', value: 91, present: '91%' },
+  { day: 'Thu', value: 98, present: '98%' },
+  { day: 'Fri', value: 94, present: '94%' },
+  { day: 'Sat', value: 42, present: '42%', isWeekend: true },
+  { day: 'Sun', value: 18, present: '18%', isWeekend: true },
 ]
 
 const studentColumns = [
   { key: 'name', label: 'STUDENT' },
+  { key: 'gender', label: 'GENDER' },
   { key: 'class', label: 'CLASS' },
   { key: 'enrolled', label: 'ENROLLMENT DATE' },
   { key: 'status', label: 'STATUS' },
   { key: 'action', label: 'ACTION' },
 ]
 
-const recentStudents = [
-  { id: 1, name: 'Olivia Martin', initials: 'OM', email: 'olivia.martin@school.edu', class: 'Grade 10 - A', enrolled: 'Oct 24, 2026', status: 'Active' },
-  { id: 2, name: 'Ethan Wilson', initials: 'EW', email: 'ethan.wilson@school.edu', class: 'Grade 8 - B', enrolled: 'Oct 23, 2026', status: 'Active' },
-  { id: 3, name: 'Sophia Chen', initials: 'SC', email: 'sophia.chen@school.edu', class: 'Grade 11 - A', enrolled: 'Oct 22, 2026', status: 'Pending' },
-  { id: 4, name: 'Noah Williams', initials: 'NW', email: 'noah.williams@school.edu', class: 'Grade 9 - C', enrolled: 'Oct 21, 2026', status: 'Active' },
-]
+function formatEnrollDate(dateStr) {
+  if (!dateStr) return 'Recently Enrolled'
+  try {
+    return new Date(dateStr).toLocaleDateString('en-US', {
+      month: 'short',
+      day: '2-digit',
+      year: 'numeric',
+    })
+  } catch {
+    return 'Recently Enrolled'
+  }
+}
+
+const recentStudents = computed(() => {
+  return [...liveStudents.value]
+    .sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0))
+    .map((s) => {
+      const parts = (s.name || 'S').trim().split(/\s+/)
+      const initials = parts.map((p) => p[0] || '').join('').toUpperCase().slice(0, 2)
+      const classLabel = s.school_class
+        ? `Grade ${s.school_class.grade} - ${s.school_class.section}`
+        : s.course || 'Unassigned'
+      return {
+        id: s.id,
+        name: s.name,
+        initials,
+        email: s.email,
+        gender: resolveGenderFromLocal('sms_student_genders', s) || 'Unassigned',
+        class: classLabel,
+        enrolled: formatEnrollDate(s.created_at),
+        status: 'Active',
+      }
+    })
+})
 
 const upcomingEvents = [
   { title: 'Midterm Examination Week', date: 'Oct 30', type: 'Exams', time: '8:30 AM', color: 'indigo' },
@@ -46,22 +250,23 @@ const upcomingEvents = [
 ]
 
 const recentAuditLogs = [
-  { time: '08:30 AM', action: 'Automated SMS & Email dispatched to 18 absentee parent contacts', type: 'Automation', tone: 'emerald' },
-  { time: '09:15 AM', action: 'Administrator registered student profile Olivia Martin (ID #1284)', type: 'Enrollment', tone: 'primary' },
-  { time: '10:20 AM', action: 'Curriculum update: Advanced Chemistry code set to CHEM-302', type: 'Academic', tone: 'blue' },
-  { time: '11:00 AM', action: 'Homeroom assignment confirmed for Grade 10 - B (Dr. Arthur Pendelton)', type: 'Faculty', tone: 'amber' },
+  { time: '08:30 AM', action: 'Automated SMS & Email dispatched to absentee parent contacts', type: 'Automation', tone: 'emerald' },
+  { time: '09:15 AM', action: 'Administrator synchronized live student & faculty directories', type: 'Enrollment', tone: 'primary' },
+  { time: '10:20 AM', action: 'Curriculum & grading schema verified for active term', type: 'Academic', tone: 'blue' },
+  { time: '11:00 AM', action: 'Role-Based Access Control (RBAC) policy verified across portals', type: 'Security', tone: 'amber' },
 ]
 
-function triggerSystemSync() {
+async function triggerSystemSync() {
   syncInProgress.value = true
   syncSuccess.value = false
+  await loadDashboardLiveMetrics()
   setTimeout(() => {
     syncInProgress.value = false
     syncSuccess.value = true
     setTimeout(() => {
       syncSuccess.value = false
     }, 3000)
-  }, 1000)
+  }, 600)
 }
 </script>
 
@@ -71,56 +276,136 @@ function triggerSystemSync() {
     <header class="dashboard-banner">
       <div class="banner-text">
         <div class="banner-eyebrow">
-          <span class="eyebrow-pill">TERM 2 • WEEK 8</span>
+          <span class="eyebrow-pill">{{ currentUser.roleLabel.toUpperCase() }}</span>
           <span class="campus-badge">Campus #GW-8821 • Fully Accredited A+</span>
           <span class="eyebrow-date">Academic Year 2026–2027</span>
         </div>
-        <h1>Good morning, Administrator <span class="wave-emoji" aria-hidden="true">👋</span></h1>
-        <p>Here is Greenwood Academy's real-time executive summary and campus activity.</p>
+        <h1>Good morning, {{ currentUser.name }} <span class="wave-emoji" aria-hidden="true">👋</span></h1>
+        <p v-if="currentUser.role === 'student'">Welcome to your student portal. You are enrolled in Grade 10 - A with Honor Roll standing.</p>
+        <p v-else-if="currentUser.role === 'teacher'">Welcome to your faculty workspace. You are assigned to Grade 10 - A Mathematics & Science.</p>
+        <p v-else>Here is Greenwood Academy's real-time executive summary and campus activity.</p>
       </div>
 
       <div class="banner-actions">
-        <button
-          type="button"
-          class="secondary-button sync-btn"
-          :disabled="syncInProgress"
-          @click="triggerSystemSync"
-          title="Synchronize database & cloud cache"
-        >
-          <svg class="sync-icon" :class="{ 'is-spinning': syncInProgress }" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="23 4 23 10 17 10"/>
-            <polyline points="1 20 1 14 7 14"/>
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-          </svg>
-          <span>{{ syncInProgress ? 'Syncing...' : syncSuccess ? 'Synchronized!' : 'System Sync' }}</span>
-        </button>
+        <!-- Student Actions -->
+        <template v-if="currentUser.role === 'student'">
+          <button type="button" class="primary-button" @click="printMyTranscript">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 6 2 18 2 18 9"/>
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+              <rect x="6" y="14" width="12" height="8"/>
+            </svg>
+            <span>Download Report Card (PDF)</span>
+          </button>
+          <RouterLink class="secondary-button" to="/reports">
+            <span>View All Grades</span>
+          </RouterLink>
+        </template>
 
-        <RouterLink class="secondary-button" to="/attendance">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-            <line x1="16" y1="2" x2="16" y2="6"/>
-            <line x1="8" y1="2" x2="8" y2="6"/>
-            <line x1="3" y1="10" x2="21" y2="10"/>
-          </svg>
-          Roll Call
-        </RouterLink>
+        <!-- Teacher Actions -->
+        <template v-else-if="currentUser.role === 'teacher'">
+          <RouterLink class="secondary-button" to="/attendance">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            <span>Roll Call</span>
+          </RouterLink>
+          <RouterLink class="primary-button" to="/exams-scores">
+            <span>Exams & Gradebook</span>
+          </RouterLink>
+        </template>
 
-        <RouterLink class="primary-button" to="/students">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-          Add Student
-        </RouterLink>
+        <!-- Admin Actions -->
+        <template v-else>
+          <button
+            type="button"
+            class="secondary-button sync-btn"
+            :disabled="syncInProgress"
+            @click="triggerSystemSync"
+            title="Synchronize database & cloud cache"
+          >
+            <svg class="sync-icon" :class="{ 'is-spinning': syncInProgress }" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            <span>{{ syncInProgress ? 'Syncing...' : syncSuccess ? 'Synchronized!' : 'System Sync' }}</span>
+          </button>
+
+          <RouterLink class="secondary-button" to="/attendance">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            Roll Call
+          </RouterLink>
+
+          <RouterLink class="primary-button" to="/students">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Add Student
+          </RouterLink>
+        </template>
       </div>
     </header>
 
     <!-- Key Metrics Grid -->
     <div class="statistics-grid">
-      <StatCard v-for="stat in statistics" :key="stat.label" v-bind="stat" />
+      <StatCard v-for="stat in activeStatistics" :key="stat.label" v-bind="stat" />
     </div>
 
-    <!-- Analytics & Summary Row -->
+    <!-- Student Course Standings Card (Shown when Student is logged in) -->
+    <section v-if="currentUser.role === 'student'" class="dashboard-panel student-grades-panel" style="margin-bottom: 24px;">
+      <header class="panel-heading">
+        <div>
+          <h2>My Enrolled Courses & Academic Standings</h2>
+          <p>Term 2 official evaluation, numerical scores, letter grades, and instructor comments</p>
+        </div>
+        <button type="button" class="secondary-button" @click="printMyTranscript">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 6 2 18 2 18 9"/>
+            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+            <rect x="6" y="14" width="12" height="8"/>
+          </svg>
+          <span>Print Official Transcript (PDF)</span>
+        </button>
+      </header>
+
+      <div class="table-scroll">
+        <table class="records-table">
+          <thead>
+            <tr>
+              <th>Course Code</th>
+              <th>Subject Name</th>
+              <th>Credits</th>
+              <th>Score</th>
+              <th>Grade</th>
+              <th>Faculty Remark</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="course in studentCourses" :key="course.code">
+              <td><code>{{ course.code }}</code></td>
+              <td><strong>{{ course.subject }}</strong></td>
+              <td>{{ course.credits }} Credits</td>
+              <td><strong class="text-primary">{{ course.score }}%</strong></td>
+              <td><span class="letter-grade-pill">{{ course.grade }}</span></td>
+              <td><span class="course-remark">{{ course.remark }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Analytics & Summary Row (Admin & Teacher Only) -->
+    <template v-if="currentUser.role !== 'student'">
     <div class="dashboard-content-grid">
       <!-- Attendance Chart Card -->
       <section class="dashboard-panel attendance-panel">
@@ -205,18 +490,18 @@ function triggerSystemSync() {
           <span class="term-tag">Capacity: 85.6%</span>
         </header>
 
-        <!-- Capacity Progress Widget -->
+        <!-- Capacity Progress Widget (Live) -->
         <div class="term-progress-box">
           <div class="progress-top">
-            <span class="progress-title">Student Capacity (1,284 / 1,500)</span>
-            <strong class="progress-pct">85.6%</strong>
+            <span class="progress-title">Enrolled Students ({{ liveStudents.length }} Total)</span>
+            <strong class="progress-pct">{{ liveClasses.length }} Classes</strong>
           </div>
           <div class="progress-track-bar">
-            <div class="progress-fill" style="width: 85.6%;"></div>
+            <div class="progress-fill" :style="{ width: `${Math.min(100, Math.max(8, liveStudents.length * 10))}%` }"></div>
           </div>
           <div class="progress-bottom">
-            <span>216 seats available</span>
-            <span>Classroom ratio: 34 students/sec</span>
+            <span>{{ liveMaleStudents }} Male · {{ liveFemaleStudents }} Female</span>
+            <span>{{ liveTeachers.length }} Active Faculty</span>
           </div>
         </div>
 
@@ -427,12 +712,12 @@ function triggerSystemSync() {
 
     <!-- Bottom Section: Recent Students & Upcoming Events -->
     <div class="dashboard-bottom-grid">
-      <!-- Recent Students Table -->
+      <!-- Recent Students Table (100% Live Enrolled Students) -->
       <section class="dashboard-panel recent-panel">
         <header class="panel-heading recent-heading">
           <div>
-            <h2>Recently Enrolled Students</h2>
-            <p>Latest student profiles registered in the system</p>
+            <h2>Enrolled Students Directory ({{ recentStudents.length }})</h2>
+            <p>Live student profiles synced from your Students directory</p>
           </div>
           <RouterLink to="/students" class="table-link">
             <span>View all students</span>
@@ -443,15 +728,41 @@ function triggerSystemSync() {
           </RouterLink>
         </header>
 
-        <DataTable :columns="studentColumns" :rows="recentStudents">
+        <div v-if="!recentStudents.length" class="empty-state" style="padding: 36px 20px;">
+          <strong>No students registered yet</strong>
+          <p>Add students in the Student Directory to see them listed here automatically.</p>
+          <RouterLink to="/students" class="primary-button" style="margin-top: 10px;">Add First Student</RouterLink>
+        </div>
+
+        <DataTable v-else :columns="studentColumns" :rows="recentStudents">
           <template #cell-name="{ row }">
             <div class="recent-person">
-              <span class="recent-avatar" :class="`avatar-${row.id}`">{{ row.initials }}</span>
+              <span class="recent-avatar" :class="`avatar-${(row.id % 4) + 1}`">{{ row.initials }}</span>
               <div class="person-meta">
                 <strong>{{ row.name }}</strong>
                 <small>{{ row.email }}</small>
               </div>
             </div>
+          </template>
+
+          <template #cell-gender="{ value }">
+            <span v-if="value === 'Male'" class="gender-badge gender-male">
+              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="10" cy="14" r="5"/>
+                <path d="M19 5l-5.4 5.4"/>
+                <path d="M15 5h4v4"/>
+              </svg>
+              Male
+            </span>
+            <span v-else-if="value === 'Female'" class="gender-badge gender-female">
+              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="9" r="5"/>
+                <path d="M12 14v7"/>
+                <path d="M9 18h6"/>
+              </svg>
+              Female
+            </span>
+            <span v-else class="gender-badge gender-unset">Unassigned</span>
           </template>
 
           <template #cell-class="{ value }">
@@ -525,6 +836,7 @@ function triggerSystemSync() {
         </div>
       </section>
     </div>
+    </template>
   </section>
 </template>
 
